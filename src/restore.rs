@@ -1,12 +1,15 @@
-use anyhow::Result;
 use crate::config::Config;
 use crate::repository::s3_to_native_path;
-use crate::utils::{echo_info, echo_success, echo_warning, echo_error, list_s3_dirs, run_command_with_env, is_restic_internal_dir};
-use dialoguer::{Select, MultiSelect, Confirm};
+use crate::utils::{
+    echo_error, echo_info, echo_success, echo_warning, is_restic_internal_dir, list_s3_dirs,
+    run_command_with_env, validate_credentials, BackupServiceError,
+};
+use anyhow::Result;
+use chrono::{DateTime, Duration, Utc};
 use colored::Colorize;
-use std::path::{Path, PathBuf};
+use dialoguer::{Confirm, MultiSelect, Select};
 use std::fs;
-use chrono::{DateTime, Utc, Duration};
+use std::path::{Path, PathBuf};
 
 pub async fn restore_interactive(
     config: Config,
@@ -19,6 +22,12 @@ pub async fn restore_interactive(
     echo_info("Restic Interactive Restore Tool");
     println!("{}", "===============================".bold());
     println!();
+
+    // Validate credentials before starting restore process
+    if let Err(e) = validate_credentials(&config).await {
+        echo_error("RESTORE ABORTED: Cannot access repository");
+        return Err(anyhow::anyhow!("Credential validation failed: {}", e));
+    }
 
     // Phase 1: Host selection
     let selected_host = if let Some(host) = host_opt {
@@ -78,9 +87,21 @@ pub async fn restore_interactive(
 
         match selection {
             0 => backup_data.clone(), // All
-            1 => backup_data.iter().filter(|r| r.category == "user_home").cloned().collect(),
-            2 => backup_data.iter().filter(|r| r.category == "docker_volume").cloned().collect(),
-            3 => backup_data.iter().filter(|r| r.category == "system").cloned().collect(),
+            1 => backup_data
+                .iter()
+                .filter(|r| r.category == "user_home")
+                .cloned()
+                .collect(),
+            2 => backup_data
+                .iter()
+                .filter(|r| r.category == "docker_volume")
+                .cloned()
+                .collect(),
+            3 => backup_data
+                .iter()
+                .filter(|r| r.category == "system")
+                .cloned()
+                .collect(),
             4 => {
                 // Custom multi-selection
                 let items: Vec<String> = backup_data
@@ -93,7 +114,8 @@ pub async fn restore_interactive(
                     .items(&items)
                     .interact()?;
 
-                selections.into_iter()
+                selections
+                    .into_iter()
                     .map(|i| backup_data[i].clone())
                     .collect()
             }
@@ -120,7 +142,10 @@ pub async fn restore_interactive(
         return Ok(());
     }
 
-    echo_info(&format!("Selected {} repositories for restoration", selected_repos.len()));
+    echo_info(&format!(
+        "Selected {} repositories for restoration",
+        selected_repos.len()
+    ));
 
     // Phase 4: Timestamp selection
     let selected_timestamp = if let Some(ts) = timestamp_opt {
@@ -151,11 +176,13 @@ pub async fn restore_interactive(
 
             if !window_times.contains(&window_time) {
                 let window_end = window_time + Duration::minutes(5);
-                let count = all_timestamps.iter()
+                let count = all_timestamps
+                    .iter()
                     .filter(|t| **t >= window_time && **t < window_end)
                     .count();
 
-                let label = format!("{} to {} ({} snapshots)",
+                let label = format!(
+                    "{} to {} ({} snapshots)",
                     window_time.format("%Y-%m-%d %H:%M"),
                     window_end.format("%H:%M"),
                     count
@@ -175,7 +202,13 @@ pub async fn restore_interactive(
         window_times[selection]
     };
 
-    echo_info(&format!("Selected time window: {}", selected_timestamp.format("%Y-%m-%d %H:%M").to_string().bold()));
+    echo_info(&format!(
+        "Selected time window: {}",
+        selected_timestamp
+            .format("%Y-%m-%d %H:%M")
+            .to_string()
+            .bold()
+    ));
 
     // Phase 5: Restoration
     let dest_dir = PathBuf::from("/tmp/restic/interactive");
@@ -183,12 +216,16 @@ pub async fn restore_interactive(
     // Check if destination exists
     if dest_dir.exists() {
         if fs::read_dir(&dest_dir)?.next().is_some() {
-            echo_warning(&format!("Destination directory {} is not empty", dest_dir.display()));
+            echo_warning(&format!(
+                "Destination directory {} is not empty",
+                dest_dir.display()
+            ));
 
             if !Confirm::new()
                 .with_prompt("Continue and clear the directory?")
                 .default(false)
-                .interact()? {
+                .interact()?
+            {
                 echo_error("Operation cancelled by user");
                 return Ok(());
             }
@@ -197,13 +234,17 @@ pub async fn restore_interactive(
     }
     fs::create_dir_all(&dest_dir)?;
 
-    echo_info(&format!("Restoring to: {}", dest_dir.display().to_string().bold()));
+    echo_info(&format!(
+        "Restoring to: {}",
+        dest_dir.display().to_string().bold()
+    ));
 
     let mut restored_count = 0;
     let mut skipped_count = 0;
 
     for repo in &selected_repos {
-        echo_info(&format!("Restoring {} from {}",
+        echo_info(&format!(
+            "Restoring {} from {}",
             repo.path.display().to_string().bold(),
             repo.repo_subpath.bold()
         ));
@@ -212,7 +253,8 @@ pub async fn restore_interactive(
 
         // Find best snapshot within time window
         let window_end = selected_timestamp + Duration::minutes(5);
-        let best_snapshot = repo.snapshots
+        let best_snapshot = repo
+            .snapshots
             .iter()
             .filter(|s| s.time >= selected_timestamp && s.time < window_end)
             .max_by_key(|s| s.time)
@@ -228,10 +270,14 @@ pub async fn restore_interactive(
             let result = run_command_with_env(
                 "restic",
                 &[
-                    "--repo", &repo_url,
-                    "restore", &snapshot.id,
-                    "--path", &repo.path.to_string_lossy(),
-                    "--target", &dest_dir.to_string_lossy(),
+                    "--repo",
+                    &repo_url,
+                    "restore",
+                    &snapshot.id,
+                    "--path",
+                    &repo.path.to_string_lossy(),
+                    "--target",
+                    &dest_dir.to_string_lossy(),
                 ],
                 &config,
             );
@@ -246,26 +292,55 @@ pub async fn restore_interactive(
                     ));
                     restored_count += 1;
                 }
+                Err(BackupServiceError::AuthenticationFailed) => {
+                    echo_error("CRITICAL ERROR: Authentication failed during restore!");
+                    echo_error("Your credentials are invalid or access was denied.");
+                    echo_error("RESTORE ABORTED - Cannot continue without proper authentication.");
+                    return Err(anyhow::anyhow!("Authentication failed during restore"));
+                }
+                Err(BackupServiceError::NetworkError) => {
+                    echo_error("CRITICAL ERROR: Network connection failed during restore!");
+                    echo_error("Cannot connect to repository endpoint.");
+                    echo_error("RESTORE ABORTED - Check your network connection and endpoint configuration.");
+                    return Err(anyhow::anyhow!("Network error during restore"));
+                }
                 Err(e) => {
-                    echo_error(&format!("Failed to restore {}: {}", repo.path.display(), e));
+                    echo_error(&format!(
+                        "RESTORE FAILED for {}: {}",
+                        repo.path.display(),
+                        e
+                    ));
+                    echo_warning("Continuing with remaining repositories...");
                     skipped_count += 1;
                 }
             }
         } else {
-            echo_warning(&format!("No suitable snapshots found for {}", repo.path.display()));
+            echo_warning(&format!(
+                "No suitable snapshots found for {}",
+                repo.path.display()
+            ));
             skipped_count += 1;
         }
     }
 
     println!();
     echo_info("Restoration Summary:");
-    echo_info(&format!("  Successfully restored: {} repositories", restored_count));
+    echo_info(&format!(
+        "  Successfully restored: {} repositories",
+        restored_count
+    ));
     echo_info(&format!("  Skipped: {} repositories", skipped_count));
-    echo_info(&format!("  Destination: {}", dest_dir.display().to_string().bold()));
+    echo_info(&format!(
+        "  Destination: {}",
+        dest_dir.display().to_string().bold()
+    ));
 
     if restored_count > 0 {
         echo_success("Restoration completed successfully!");
-        echo_info(&format!("You can now access your restored files at {}", dest_dir.display()));
+        echo_info(&format!(
+            "You can now access your restored files at {}",
+            dest_dir.display()
+        ));
 
         // Offer to move/copy files
         println!();
@@ -293,7 +368,7 @@ pub async fn restore_interactive(
 
                         // Use system cp command for simplicity
                         let result = std::process::Command::new("cp")
-                            .args(&["-rf", &src.to_string_lossy(), &parent.to_string_lossy()])
+                            .args(["-rf", &src.to_string_lossy(), &parent.to_string_lossy()])
                             .output()?;
 
                         if result.status.success() {
@@ -321,8 +396,17 @@ pub async fn restore_interactive(
                 }
                 fs::remove_dir_all(&dest_dir).ok();
             }
-            2 | _ => {
-                echo_info(&format!("Files remain at temporary location: {}", dest_dir.display()));
+            2 => {
+                echo_info(&format!(
+                    "Files remain at temporary location: {}",
+                    dest_dir.display()
+                ));
+            }
+            _ => {
+                echo_info(&format!(
+                    "Files remain at temporary location: {}",
+                    dest_dir.display()
+                ));
             }
         }
     }
@@ -332,7 +416,9 @@ pub async fn restore_interactive(
 
 async fn get_available_hosts(config: &Config) -> Result<Vec<String>> {
     let base_path = config.s3_base_path();
-    list_s3_dirs(config, &base_path).await
+    list_s3_dirs(config, &base_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to get available hosts: {}", e))
 }
 
 #[derive(Debug, Clone)]
@@ -363,13 +449,30 @@ async fn collect_backup_data(config: &Config, hostname: &str) -> Result<Vec<Rest
                     let native_path = PathBuf::from(format!("/home/{}/{}", user, native_subdir));
                     let repo_subpath = format!("user_home/{}/{}", user, subdir);
 
-                    if let Some(snapshots) = get_repo_snapshots(config, hostname, &repo_subpath).await {
-                        repos.push(RestoreRepo {
-                            path: native_path,
-                            repo_subpath,
-                            category: "user_home".to_string(),
-                            snapshots,
-                        });
+                    match get_repo_snapshots(config, hostname, &repo_subpath).await {
+                        Ok(Some(snapshots)) => {
+                            repos.push(RestoreRepo {
+                                path: native_path,
+                                repo_subpath,
+                                category: "user_home".to_string(),
+                                snapshots,
+                            });
+                        }
+                        Ok(None) => {
+                            // No snapshots in this repository - skip it
+                        }
+                        Err(BackupServiceError::AuthenticationFailed) => {
+                            echo_error(
+                                "CRITICAL: Authentication failed while scanning repositories!",
+                            );
+                            return Err(anyhow::anyhow!(
+                                "Authentication failed during backup data collection"
+                            ));
+                        }
+                        Err(_) => {
+                            // Skip this repository - might be corrupted or inaccessible
+                            continue;
+                        }
                     }
                 }
             }
@@ -384,32 +487,68 @@ async fn collect_backup_data(config: &Config, hostname: &str) -> Result<Vec<Rest
             let repo_subpath = format!("docker_volume/{}", volume);
 
             // Check for direct snapshots
-            if let Some(snapshots) = get_repo_snapshots(config, hostname, &repo_subpath).await {
-                repos.push(RestoreRepo {
-                    path: native_path.clone(),
-                    repo_subpath,
-                    category: "docker_volume".to_string(),
-                    snapshots,
-                });
-            } else {
-                // Check for nested repositories
-                let volume_path = format!("{}/{}", docker_path, volume);
-                if let Ok(nested) = list_s3_dirs(config, &volume_path).await {
-                    for nested_repo in nested {
-                        if !is_restic_internal_dir(&nested_repo) {
-                            let nested_path = PathBuf::from(format!("/mnt/docker-data/volumes/{}/{}", volume, nested_repo));
-                            let nested_repo_subpath = format!("docker_volume/{}/{}", volume, nested_repo);
+            match get_repo_snapshots(config, hostname, &repo_subpath).await {
+                Ok(Some(snapshots)) => {
+                    repos.push(RestoreRepo {
+                        path: native_path.clone(),
+                        repo_subpath,
+                        category: "docker_volume".to_string(),
+                        snapshots,
+                    });
+                }
+                Ok(None) => {
+                    // Check for nested repositories
+                    let volume_path = format!("{}/{}", docker_path, volume);
+                    if let Ok(nested) = list_s3_dirs(config, &volume_path).await {
+                        for nested_repo in nested {
+                            if !is_restic_internal_dir(&nested_repo) {
+                                let nested_path = PathBuf::from(format!(
+                                    "/mnt/docker-data/volumes/{}/{}",
+                                    volume, nested_repo
+                                ));
+                                let nested_repo_subpath =
+                                    format!("docker_volume/{}/{}", volume, nested_repo);
 
-                            if let Some(snapshots) = get_repo_snapshots(config, hostname, &nested_repo_subpath).await {
-                                repos.push(RestoreRepo {
-                                    path: nested_path,
-                                    repo_subpath: nested_repo_subpath,
-                                    category: "docker_volume".to_string(),
-                                    snapshots,
-                                });
+                                match get_repo_snapshots(config, hostname, &nested_repo_subpath)
+                                    .await
+                                {
+                                    Ok(Some(snapshots)) => {
+                                        repos.push(RestoreRepo {
+                                            path: nested_path,
+                                            repo_subpath: nested_repo_subpath,
+                                            category: "docker_volume".to_string(),
+                                            snapshots,
+                                        });
+                                    }
+                                    Ok(None) => {
+                                        // No snapshots in this nested repository
+                                    }
+                                    Err(BackupServiceError::AuthenticationFailed) => {
+                                        echo_error("CRITICAL: Authentication failed while scanning nested repositories!");
+                                        return Err(anyhow::anyhow!(
+                                            "Authentication failed during nested repository scan"
+                                        ));
+                                    }
+                                    Err(_) => {
+                                        // Skip this nested repository
+                                        continue;
+                                    }
+                                }
                             }
                         }
                     }
+                }
+                Err(BackupServiceError::AuthenticationFailed) => {
+                    echo_error(
+                        "CRITICAL: Authentication failed while scanning docker repositories!",
+                    );
+                    return Err(anyhow::anyhow!(
+                        "Authentication failed during docker repository scan"
+                    ));
+                }
+                Err(_) => {
+                    // Skip this docker volume
+                    continue;
                 }
             }
         }
@@ -423,13 +562,30 @@ async fn collect_backup_data(config: &Config, hostname: &str) -> Result<Vec<Rest
             let native_path = PathBuf::from(format!("/{}", native_path_str));
             let repo_subpath = format!("system/{}", path);
 
-            if let Some(snapshots) = get_repo_snapshots(config, hostname, &repo_subpath).await {
-                repos.push(RestoreRepo {
-                    path: native_path,
-                    repo_subpath,
-                    category: "system".to_string(),
-                    snapshots,
-                });
+            match get_repo_snapshots(config, hostname, &repo_subpath).await {
+                Ok(Some(snapshots)) => {
+                    repos.push(RestoreRepo {
+                        path: native_path,
+                        repo_subpath,
+                        category: "system".to_string(),
+                        snapshots,
+                    });
+                }
+                Ok(None) => {
+                    // No snapshots in this system repository
+                }
+                Err(BackupServiceError::AuthenticationFailed) => {
+                    echo_error(
+                        "CRITICAL: Authentication failed while scanning system repositories!",
+                    );
+                    return Err(anyhow::anyhow!(
+                        "Authentication failed during system repository scan"
+                    ));
+                }
+                Err(_) => {
+                    // Skip this system repository
+                    continue;
+                }
             }
         }
     }
@@ -437,29 +593,36 @@ async fn collect_backup_data(config: &Config, hostname: &str) -> Result<Vec<Rest
     Ok(repos)
 }
 
-async fn get_repo_snapshots(config: &Config, hostname: &str, repo_subpath: &str) -> Option<Vec<RestoreSnapshot>> {
+async fn get_repo_snapshots(
+    config: &Config,
+    hostname: &str,
+    repo_subpath: &str,
+) -> Result<Option<Vec<RestoreSnapshot>>, BackupServiceError> {
     let repo_url = format!("{}/{}/{}", config.restic_repo_base, hostname, repo_subpath);
 
-    if let Ok(output) = run_command_with_env(
+    let output = run_command_with_env(
         "restic",
         &["--repo", &repo_url, "snapshots", "--json"],
         config,
-    ) {
-        if let Ok(snapshots) = serde_json::from_str::<Vec<serde_json::Value>>(&output) {
-            let snapshot_list: Vec<RestoreSnapshot> = snapshots
-                .into_iter()
-                .filter_map(|s| {
-                    let time = s["time"].as_str()?
-                        .parse::<DateTime<Utc>>().ok()?;
-                    let id = s["short_id"].as_str()?.to_string();
-                    Some(RestoreSnapshot { id, time })
-                })
-                .collect();
+    )?;
 
-            if !snapshot_list.is_empty() {
-                return Some(snapshot_list);
-            }
+    if let Ok(snapshots) = serde_json::from_str::<Vec<serde_json::Value>>(&output) {
+        let snapshot_list: Vec<RestoreSnapshot> = snapshots
+            .into_iter()
+            .filter_map(|s| {
+                let time = s["time"].as_str()?.parse::<DateTime<Utc>>().ok()?;
+                let id = s["short_id"].as_str()?.to_string();
+                Some(RestoreSnapshot { id, time })
+            })
+            .collect();
+
+        if !snapshot_list.is_empty() {
+            Ok(Some(snapshot_list))
+        } else {
+            Ok(None)
         }
+    } else {
+        // JSON parsing failed - probably not a real repository
+        Ok(None)
     }
-    None
 }

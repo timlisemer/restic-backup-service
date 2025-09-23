@@ -28,7 +28,7 @@ enum Commands {
     /// List all available backups
     List {
         /// Hostname to list backups for (default: current host)
-        #[arg(short, long)]
+        #[arg(short = 'H', long)]
         host: Option<String>,
         /// Return data as JSON (for scripting)
         #[arg(short, long)]
@@ -37,7 +37,7 @@ enum Commands {
     /// Interactively restore backups
     Restore {
         /// Non-interactive mode with specific options
-        #[arg(short, long)]
+        #[arg(short = 'H', long)]
         host: Option<String>,
         #[arg(short, long)]
         path: Option<String>,

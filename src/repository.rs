@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 pub fn path_to_repo_subpath(path: &Path) -> String {
     let path_str = path.to_string_lossy();
 
-    if path_str.starts_with("/home/") {
+    if let Some(stripped) = path_str.strip_prefix("/home/") {
         // User home paths
-        let parts: Vec<&str> = path_str[6..].split('/').collect();
+        let parts: Vec<&str> = stripped.split('/').collect();
         if parts.is_empty() {
             return "user_home".to_string();
         }
@@ -18,9 +18,9 @@ pub fn path_to_repo_subpath(path: &Path) -> String {
             let subdir = parts[1..].join("_");
             format!("user_home/{}/{}", username, subdir)
         }
-    } else if path_str.starts_with("/mnt/docker-data/volumes/") {
+    } else if let Some(stripped) = path_str.strip_prefix("/mnt/docker-data/volumes/") {
         // Docker volume paths
-        let volume_path = &path_str[25..];
+        let volume_path = stripped;
         if volume_path.is_empty() {
             "docker_volume".to_string()
         } else {

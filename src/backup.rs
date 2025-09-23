@@ -1,7 +1,7 @@
 use anyhow::Result;
 use crate::config::Config;
 use crate::repository;
-use crate::utils::{echo_info, echo_success, echo_warning, echo_error, run_command_with_env, init_repo_if_needed};
+use crate::utils::{echo_info, echo_success, echo_warning, echo_error, run_command_with_env, init_repo_if_needed, validate_credentials, BackupServiceError};
 use std::path::{Path, PathBuf};
 use indicatif::{ProgressBar, ProgressStyle};
 use colored::Colorize;
@@ -11,6 +11,12 @@ pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result
     echo_info(&format!("Starting backup process for host: {}", hostname.bold()));
 
     config.set_aws_env();
+
+    // Validate credentials before doing any backup work
+    if let Err(e) = validate_credentials(&config).await {
+        echo_error("BACKUP ABORTED: Cannot proceed without valid credentials");
+        return Err(anyhow::anyhow!("Credential validation failed: {}", e));
+    }
 
     // Collect all paths to backup
     let mut all_paths: Vec<PathBuf> = config.backup_paths.clone();
@@ -72,9 +78,25 @@ pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result
 
         // Initialize repository if needed
         if let Err(e) = init_repo_if_needed(&config, &repo_url).await {
-            echo_warning(&format!("Failed to initialize repository for {}: {}", path.display(), e));
-            skip_count += 1;
-            continue;
+            match e {
+                BackupServiceError::AuthenticationFailed => {
+                    echo_error("CRITICAL ERROR: Authentication failed during repository initialization!");
+                    echo_error("Your credentials are invalid or have insufficient permissions.");
+                    echo_error("BACKUP ABORTED - Cannot continue without proper access.");
+                    return Err(anyhow::anyhow!("Authentication failed"));
+                }
+                BackupServiceError::NetworkError => {
+                    echo_error("CRITICAL ERROR: Network connection failed!");
+                    echo_error("Cannot connect to repository endpoint.");
+                    echo_error("BACKUP ABORTED - Check your network and endpoint configuration.");
+                    return Err(anyhow::anyhow!("Network error"));
+                }
+                _ => {
+                    echo_warning(&format!("Failed to initialize repository for {}: {}", path.display(), e));
+                    skip_count += 1;
+                    continue;
+                }
+            }
         }
 
         // Run backup
@@ -117,8 +139,21 @@ pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result
                     skip_count += 1;
                 }
             }
+            Err(BackupServiceError::AuthenticationFailed) => {
+                echo_error("CRITICAL ERROR: Authentication failed during backup!");
+                echo_error("Your credentials are invalid or access was denied.");
+                echo_error("BACKUP ABORTED - Cannot continue without proper authentication.");
+                return Err(anyhow::anyhow!("Authentication failed during backup"));
+            }
+            Err(BackupServiceError::NetworkError) => {
+                echo_error("CRITICAL ERROR: Network connection failed during backup!");
+                echo_error("Cannot connect to repository endpoint.");
+                echo_error("BACKUP ABORTED - Check your network connection and endpoint configuration.");
+                return Err(anyhow::anyhow!("Network error during backup"));
+            }
             Err(e) => {
-                echo_error(&format!("Error backing up {}: {}", path.display(), e));
+                echo_error(&format!("BACKUP FAILED for {}: {}", path.display(), e));
+                echo_warning("Continuing with remaining paths...");
                 skip_count += 1;
             }
         }
@@ -126,10 +161,23 @@ pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result
 
     pb.finish_and_clear();
 
-    echo_info(&format!(
-        "Backup completed: {} successful, {} skipped",
-        success_count, skip_count
-    ));
+    if success_count == 0 && skip_count > 0 {
+        echo_error(&format!(
+            "BACKUP FAILED: 0 successful, {} failed/skipped",
+            skip_count
+        ));
+        echo_error("No data was backed up! Please check the errors above.");
+    } else if skip_count > 0 {
+        echo_warning(&format!(
+            "Backup partially completed: {} successful, {} failed/skipped",
+            success_count, skip_count
+        ));
+    } else {
+        echo_success(&format!(
+            "Backup completed successfully: {} paths backed up",
+            success_count
+        ));
+    }
 
     Ok(())
 }

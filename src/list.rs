@@ -1,9 +1,9 @@
 use anyhow::Result;
 use crate::config::Config;
 use crate::repository::{BackupRepo, s3_to_native_path};
-use crate::utils::{echo_info, echo_warning, list_s3_dirs, run_command_with_env, is_restic_internal_dir};
+use crate::utils::{echo_info, echo_warning, echo_error, list_s3_dirs, run_command_with_env, is_restic_internal_dir, validate_credentials, BackupServiceError};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use serde_json::json;
 use colored::Colorize;
 use chrono::{DateTime, Utc};
@@ -12,15 +12,29 @@ pub async fn list_hosts(config: Config) -> Result<()> {
     echo_info("Getting available hosts...");
     config.set_aws_env();
 
-    let base_path = config.s3_base_path();
-    let hosts = list_s3_dirs(&config, &base_path).await?;
+    // Validate credentials before trying to list hosts
+    if let Err(e) = validate_credentials(&config).await {
+        echo_error("FAILED TO LIST HOSTS: Cannot access repository");
+        return Err(anyhow::anyhow!("Credential validation failed: {}", e));
+    }
 
-    if hosts.is_empty() {
-        echo_warning("No hosts found in backup repository");
-    } else {
-        println!("\nAvailable hosts:");
-        for host in hosts {
-            println!("  - {}", host);
+    let base_path = config.s3_base_path();
+
+    match list_s3_dirs(&config, &base_path).await {
+        Ok(hosts) => {
+            if hosts.is_empty() {
+                echo_warning("No hosts found in backup repository (repository is empty)");
+            } else {
+                println!("\nAvailable hosts:");
+                for host in hosts {
+                    println!("  - {}", host);
+                }
+            }
+        }
+        Err(e) => {
+            echo_error("FAILED TO LIST HOSTS: Repository access error");
+            echo_error(&format!("Error: {}", e));
+            return Err(anyhow::anyhow!("Failed to list hosts: {}", e));
         }
     }
 
@@ -33,6 +47,20 @@ pub async fn list_backups(config: Config, host: Option<String>, json_output: boo
 
     if !json_output {
         echo_info(&format!("Listing backups for {} from S3 bucket...", hostname.bold()));
+    }
+
+    // Validate credentials before trying to list backups
+    if let Err(e) = validate_credentials(&config).await {
+        if json_output {
+            let error_output = json!({
+                "error": "authentication_failed",
+                "message": format!("Cannot access repository: {}", e)
+            });
+            println!("{}", serde_json::to_string_pretty(&error_output)?);
+        } else {
+            echo_error("FAILED TO LIST BACKUPS: Cannot access repository");
+        }
+        return Err(anyhow::anyhow!("Credential validation failed: {}", e));
     }
 
     let mut repos: Vec<BackupRepo> = Vec::new();
@@ -49,10 +77,22 @@ pub async fn list_backups(config: Config, host: Option<String>, json_output: boo
                     let native_path = PathBuf::from(format!("/home/{}/{}", user, native_subdir));
                     let repo_subpath = format!("user_home/{}/{}", user, subdir);
 
-                    let (count, snapshots) = get_snapshots(&config, &hostname, &repo_subpath, &native_path).await;
-                    if count > 0 {
-                        repos.push(BackupRepo::new(native_path).with_count(count));
-                        all_snapshots.extend(snapshots);
+                    match get_snapshots(&config, &hostname, &repo_subpath, &native_path).await {
+                        Ok((count, snapshots)) => {
+                            if count > 0 {
+                                repos.push(BackupRepo::new(native_path).with_count(count));
+                                all_snapshots.extend(snapshots);
+                            }
+                        }
+                        Err(BackupServiceError::AuthenticationFailed) => {
+                            echo_error("CRITICAL: Authentication failed while scanning repositories!");
+                            echo_error("This should not happen after credential validation.");
+                            return Err(anyhow::anyhow!("Authentication failed during repository scan"));
+                        }
+                        Err(_) => {
+                            // Skip this repository - might be corrupted or inaccessible
+                            continue;
+                        }
                     }
                 }
             }
@@ -67,28 +107,50 @@ pub async fn list_backups(config: Config, host: Option<String>, json_output: boo
             let repo_subpath = format!("docker_volume/{}", volume);
 
             // Check for direct snapshots
-            let (count, snapshots) = get_snapshots(&config, &hostname, &repo_subpath, &native_path).await;
-            if count > 0 {
-                repos.push(BackupRepo::new(native_path.clone()).with_count(count));
-                all_snapshots.extend(snapshots);
-            } else {
-                // Check for nested repositories
-                let volume_path = format!("{}/{}", docker_path, volume);
-                if let Ok(nested) = list_s3_dirs(&config, &volume_path).await {
-                    let real_nested: Vec<_> = nested.into_iter()
-                        .filter(|d| !is_restic_internal_dir(d))
-                        .collect();
+            match get_snapshots(&config, &hostname, &repo_subpath, &native_path).await {
+                Ok((count, snapshots)) => {
+                    if count > 0 {
+                        repos.push(BackupRepo::new(native_path.clone()).with_count(count));
+                        all_snapshots.extend(snapshots);
+                    } else {
+                        // Check for nested repositories
+                        let volume_path = format!("{}/{}", docker_path, volume);
+                        if let Ok(nested) = list_s3_dirs(&config, &volume_path).await {
+                            let real_nested: Vec<_> = nested.into_iter()
+                                .filter(|d| !is_restic_internal_dir(d))
+                                .collect();
 
-                    for nested_repo in real_nested {
-                        let nested_path = PathBuf::from(format!("/mnt/docker-data/volumes/{}/{}", volume, nested_repo));
-                        let nested_repo_subpath = format!("docker_volume/{}/{}", volume, nested_repo);
+                            for nested_repo in real_nested {
+                                let nested_path = PathBuf::from(format!("/mnt/docker-data/volumes/{}/{}", volume, nested_repo));
+                                let nested_repo_subpath = format!("docker_volume/{}/{}", volume, nested_repo);
 
-                        let (nested_count, nested_snapshots) = get_snapshots(&config, &hostname, &nested_repo_subpath, &nested_path).await;
-                        if nested_count > 0 {
-                            repos.push(BackupRepo::new(nested_path).with_count(nested_count));
-                            all_snapshots.extend(nested_snapshots);
+                                match get_snapshots(&config, &hostname, &nested_repo_subpath, &nested_path).await {
+                                    Ok((nested_count, nested_snapshots)) => {
+                                        if nested_count > 0 {
+                                            repos.push(BackupRepo::new(nested_path).with_count(nested_count));
+                                            all_snapshots.extend(nested_snapshots);
+                                        }
+                                    }
+                                    Err(BackupServiceError::AuthenticationFailed) => {
+                                        echo_error("CRITICAL: Authentication failed while scanning nested repositories!");
+                                        return Err(anyhow::anyhow!("Authentication failed during nested repository scan"));
+                                    }
+                                    Err(_) => {
+                                        // Skip this nested repository
+                                        continue;
+                                    }
+                                }
+                            }
                         }
                     }
+                }
+                Err(BackupServiceError::AuthenticationFailed) => {
+                    echo_error("CRITICAL: Authentication failed while scanning docker repositories!");
+                    return Err(anyhow::anyhow!("Authentication failed during docker repository scan"));
+                }
+                Err(_) => {
+                    // Skip this docker volume
+                    continue;
                 }
             }
         }
@@ -102,10 +164,21 @@ pub async fn list_backups(config: Config, host: Option<String>, json_output: boo
             let native_path = PathBuf::from(format!("/{}", native_path_str));
             let repo_subpath = format!("system/{}", path);
 
-            let (count, snapshots) = get_snapshots(&config, &hostname, &repo_subpath, &native_path).await;
-            if count > 0 {
-                repos.push(BackupRepo::new(native_path).with_count(count));
-                all_snapshots.extend(snapshots);
+            match get_snapshots(&config, &hostname, &repo_subpath, &native_path).await {
+                Ok((count, snapshots)) => {
+                    if count > 0 {
+                        repos.push(BackupRepo::new(native_path).with_count(count));
+                        all_snapshots.extend(snapshots);
+                    }
+                }
+                Err(BackupServiceError::AuthenticationFailed) => {
+                    echo_error("CRITICAL: Authentication failed while scanning system repositories!");
+                    return Err(anyhow::anyhow!("Authentication failed during system repository scan"));
+                }
+                Err(_) => {
+                    // Skip this system repository
+                    continue;
+                }
             }
         }
     }
@@ -134,33 +207,35 @@ pub async fn list_backups(config: Config, host: Option<String>, json_output: boo
     Ok(())
 }
 
-async fn get_snapshots(config: &Config, hostname: &str, repo_subpath: &str, native_path: &PathBuf) -> (usize, Vec<SnapshotInfo>) {
+async fn get_snapshots(config: &Config, hostname: &str, repo_subpath: &str, native_path: &Path) -> Result<(usize, Vec<SnapshotInfo>), BackupServiceError> {
     let repo_url = format!("{}/{}/{}", config.restic_repo_base, hostname, repo_subpath);
 
-    if let Ok(output) = run_command_with_env(
+    let output = run_command_with_env(
         "restic",
         &["--repo", &repo_url, "snapshots", "--json"],
         config,
-    ) {
-        if let Ok(snapshots) = serde_json::from_str::<Vec<serde_json::Value>>(&output) {
-            let count = snapshots.len();
-            let snapshot_infos: Vec<SnapshotInfo> = snapshots
-                .into_iter()
-                .filter_map(|s| {
-                    let time = s["time"].as_str()?
-                        .parse::<DateTime<Utc>>().ok()?;
-                    let id = s["short_id"].as_str()?.to_string();
-                    Some(SnapshotInfo {
-                        time,
-                        path: native_path.clone(),
-                        id,
-                    })
+    )?;
+
+    if let Ok(snapshots) = serde_json::from_str::<Vec<serde_json::Value>>(&output) {
+        let count = snapshots.len();
+        let snapshot_infos: Vec<SnapshotInfo> = snapshots
+            .into_iter()
+            .filter_map(|s| {
+                let time = s["time"].as_str()?
+                    .parse::<DateTime<Utc>>().ok()?;
+                let id = s["short_id"].as_str()?.to_string();
+                Some(SnapshotInfo {
+                    time,
+                    path: native_path.to_path_buf(),
+                    id,
                 })
-                .collect();
-            return (count, snapshot_infos);
-        }
+            })
+            .collect();
+        Ok((count, snapshot_infos))
+    } else {
+        // JSON parsing failed - probably not a real repository or corrupted data
+        Ok((0, Vec::new()))
     }
-    (0, Vec::new())
 }
 
 fn display_backup_summary(repos: &[BackupRepo], snapshots: &[SnapshotInfo]) {
