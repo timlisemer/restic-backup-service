@@ -5,6 +5,7 @@ use colored::*;
 mod config;
 mod repository;
 mod utils;
+mod helpers;
 mod backup;
 mod list;
 mod restore;

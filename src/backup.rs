@@ -1,7 +1,7 @@
 use anyhow::Result;
 use crate::config::Config;
-use crate::repository;
-use crate::utils::{echo_info, echo_success, echo_warning, echo_error, run_command_with_env, init_repo_if_needed, validate_credentials, BackupServiceError};
+use crate::helpers::{PathMapper, ResticCommand};
+use crate::utils::{echo_info, echo_success, echo_warning, echo_error, validate_credentials, BackupServiceError};
 use std::path::{Path, PathBuf};
 use indicatif::{ProgressBar, ProgressStyle};
 use colored::Colorize;
@@ -73,11 +73,12 @@ pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result
             continue;
         }
 
-        let repo_subpath = repository::path_to_repo_subpath(path);
+        let repo_subpath = PathMapper::path_to_repo_subpath(path);
         let repo_url = config.get_repo_url(&repo_subpath);
+        let restic_cmd = ResticCommand::new(config.clone(), repo_url);
 
         // Initialize repository if needed
-        if let Err(e) = init_repo_if_needed(&config, &repo_url).await {
+        if let Err(e) = restic_cmd.init_if_needed().await {
             match e {
                 BackupServiceError::AuthenticationFailed => {
                     echo_error("CRITICAL ERROR: Authentication failed during repository initialization!");
@@ -99,18 +100,8 @@ pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result
             }
         }
 
-        // Run backup
-        let path_str = path.to_string_lossy();
-        let backup_result = run_command_with_env(
-            "restic",
-            &[
-                "--repo", &repo_url,
-                "backup", &path_str,
-                "--host", hostname,
-                "--tag", determine_tag(path),
-            ],
-            &config,
-        );
+        // Run backup using ResticCommand helper
+        let backup_result = restic_cmd.backup(path, hostname).await;
 
         match backup_result {
             Ok(output) => {
@@ -182,13 +173,3 @@ pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result
     Ok(())
 }
 
-fn determine_tag(path: &Path) -> &'static str {
-    let path_str = path.to_string_lossy();
-    if path_str.starts_with("/home/") {
-        "user-path"
-    } else if path_str.starts_with("/mnt/docker-data/volumes/") {
-        "docker-volume"
-    } else {
-        "system-path"
-    }
-}
