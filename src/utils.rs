@@ -1,23 +1,8 @@
-use anyhow::Result;
 use colored::*;
 use std::process::Command;
 use crate::config::Config;
+use crate::errors::{BackupServiceError, Result};
 use std::path::Path;
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum BackupServiceError {
-    #[error("Authentication failed: Invalid credentials or access denied")]
-    AuthenticationFailed,
-    #[error("Network error: Cannot connect to repository")]
-    NetworkError,
-    #[error("Repository not found: {0}")]
-    RepositoryNotFound(String),
-    #[error("Command execution failed: {0}")]
-    CommandFailed(String),
-    #[error("Invalid repository path or configuration")]
-    InvalidRepository,
-}
 
 // Color coded output helpers
 pub fn echo_info(msg: &str) {
@@ -39,7 +24,7 @@ pub fn echo_warning(msg: &str) {
 
 
 /// Validate credentials by testing basic S3 and restic connectivity
-pub async fn validate_credentials(config: &Config) -> Result<(), BackupServiceError> {
+pub async fn validate_credentials(config: &Config) -> Result<()> {
     echo_info("Validating credentials...");
 
     // Test S3 connectivity by listing bucket root
@@ -54,35 +39,40 @@ pub async fn validate_credentials(config: &Config) -> Result<(), BackupServiceEr
         .env("AWS_SECRET_ACCESS_KEY", &config.aws_secret_access_key)
         .env("AWS_DEFAULT_REGION", &config.aws_default_region)
         .output()
-        .map_err(|_| BackupServiceError::CommandFailed("Failed to execute aws".to_string()))?;
+        .map_err(|_| BackupServiceError::CommandNotFound("Failed to execute aws".to_string()))?;
 
     if output.status.success() {
         echo_success("Credentials validated successfully");
         Ok(())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let error = BackupServiceError::from_stderr(&stderr, "credential validation");
 
-        if stderr.contains("access denied") || stderr.contains("invalid credentials") {
-            echo_error("CREDENTIAL VALIDATION FAILED!");
-            echo_error("Your AWS credentials are invalid or access is denied.");
-            echo_error("Please check your .env file and verify:");
-            echo_error("  - AWS_ACCESS_KEY_ID is correct");
-            echo_error("  - AWS_SECRET_ACCESS_KEY is correct");
-            echo_error("  - AWS_S3_ENDPOINT is correct");
-            echo_error("  - Your credentials have access to the S3 bucket");
-            Err(BackupServiceError::AuthenticationFailed)
-        } else if stderr.contains("network") || stderr.contains("connection") {
-            echo_error("NETWORK CONNECTION FAILED!");
-            echo_error("Cannot connect to your S3 endpoint.");
-            echo_error("Please check:");
-            echo_error("  - Your internet connection");
-            echo_error("  - AWS_S3_ENDPOINT URL is correct and reachable");
-            Err(BackupServiceError::NetworkError)
-        } else {
-            echo_error("REPOSITORY ACCESS FAILED!");
-            echo_error(&format!("Error: {}", String::from_utf8_lossy(&output.stderr)));
-            Err(BackupServiceError::CommandFailed(String::from_utf8_lossy(&output.stderr).to_string()))
+        // Display detailed error messages based on error type
+        match &error {
+            BackupServiceError::AuthenticationFailed => {
+                echo_error("CREDENTIAL VALIDATION FAILED!");
+                echo_error("Your AWS credentials are invalid or access is denied.");
+                echo_error("Please check your .env file and verify:");
+                echo_error("  - AWS_ACCESS_KEY_ID is correct");
+                echo_error("  - AWS_SECRET_ACCESS_KEY is correct");
+                echo_error("  - AWS_S3_ENDPOINT is correct");
+                echo_error("  - Your credentials have access to the S3 bucket");
+            }
+            BackupServiceError::NetworkError => {
+                echo_error("NETWORK CONNECTION FAILED!");
+                echo_error("Cannot connect to your S3 endpoint.");
+                echo_error("Please check:");
+                echo_error("  - Your internet connection");
+                echo_error("  - AWS_S3_ENDPOINT URL is correct and reachable");
+            }
+            _ => {
+                echo_error("REPOSITORY ACCESS FAILED!");
+                echo_error(&format!("Error: {}", stderr));
+            }
         }
+
+        Err(error.with_validation_context())
     }
 }
 

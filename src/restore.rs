@@ -1,9 +1,7 @@
 use crate::config::Config;
+use crate::errors::{BackupServiceError, Result};
 use crate::helpers::{RepositoryScanner, ResticCommand};
-use crate::utils::{
-    echo_error, echo_info, echo_success, echo_warning, validate_credentials, BackupServiceError,
-};
-use anyhow::Result;
+use crate::utils::{echo_error, echo_info, echo_success, echo_warning, validate_credentials};
 use chrono::{DateTime, Duration, Utc};
 use colored::Colorize;
 use dialoguer::{Confirm, MultiSelect, Select};
@@ -23,10 +21,7 @@ pub async fn restore_interactive(
     println!();
 
     // Validate credentials before starting restore process
-    if let Err(e) = validate_credentials(&config).await {
-        echo_error("RESTORE ABORTED: Cannot access repository");
-        return Err(anyhow::anyhow!("Credential validation failed: {}", e));
-    }
+    validate_credentials(&config).await?;
 
     // Phase 1: Host selection
     let selected_host = if let Some(host) = host_opt {
@@ -285,17 +280,10 @@ pub async fn restore_interactive(
                     ));
                     restored_count += 1;
                 }
-                Err(BackupServiceError::AuthenticationFailed) => {
-                    echo_error("CRITICAL ERROR: Authentication failed during restore!");
-                    echo_error("Your credentials are invalid or access was denied.");
-                    echo_error("RESTORE ABORTED - Cannot continue without proper authentication.");
-                    return Err(anyhow::anyhow!("Authentication failed during restore"));
-                }
-                Err(BackupServiceError::NetworkError) => {
-                    echo_error("CRITICAL ERROR: Network connection failed during restore!");
-                    echo_error("Cannot connect to repository endpoint.");
-                    echo_error("RESTORE ABORTED - Check your network connection and endpoint configuration.");
-                    return Err(anyhow::anyhow!("Network error during restore"));
+                Err(
+                    BackupServiceError::AuthenticationFailed | BackupServiceError::NetworkError,
+                ) => {
+                    return Err(result.unwrap_err());
                 }
                 Err(e) => {
                     echo_error(&format!(
@@ -409,10 +397,7 @@ pub async fn restore_interactive(
 
 async fn get_available_hosts(config: &Config) -> Result<Vec<String>> {
     let scanner = RepositoryScanner::new(config.clone());
-    scanner
-        .get_hosts()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to get available hosts: {}", e))
+    scanner.get_hosts().await
 }
 
 #[derive(Debug, Clone)]
@@ -433,19 +418,7 @@ async fn collect_backup_data(config: &Config, hostname: &str) -> Result<Vec<Rest
     let scanner = RepositoryScanner::new(config.clone());
 
     // Get all repositories using the unified scanner
-    let repo_infos = match scanner.scan_repositories(hostname).await {
-        Ok(repos) => repos,
-        Err(BackupServiceError::AuthenticationFailed) => {
-            echo_error("CRITICAL: Authentication failed while scanning repositories!");
-            return Err(anyhow::anyhow!(
-                "Authentication failed during backup data collection"
-            ));
-        }
-        Err(e) => {
-            echo_error(&format!("Failed to scan repositories: {}", e));
-            return Err(anyhow::anyhow!("Repository scan failed: {}", e));
-        }
-    };
+    let repo_infos = scanner.scan_repositories(hostname).await?;
 
     let mut repos = Vec::new();
 
@@ -464,10 +437,7 @@ async fn collect_backup_data(config: &Config, hostname: &str) -> Result<Vec<Rest
                 // No snapshots in this repository - skip it
             }
             Err(BackupServiceError::AuthenticationFailed) => {
-                echo_error("CRITICAL: Authentication failed while collecting snapshots!");
-                return Err(anyhow::anyhow!(
-                    "Authentication failed during snapshot collection"
-                ));
+                return Err(BackupServiceError::AuthenticationFailed);
             }
             Err(_) => {
                 // Skip repositories that can't be accessed
@@ -483,7 +453,7 @@ async fn get_repo_snapshots(
     config: &Config,
     hostname: &str,
     repo_subpath: &str,
-) -> Result<Option<Vec<RestoreSnapshot>>, BackupServiceError> {
+) -> Result<Option<Vec<RestoreSnapshot>>> {
     let repo_url = format!("{}/{}/{}", config.restic_repo_base, hostname, repo_subpath);
     let restic_cmd = ResticCommand::new(config.clone(), repo_url);
 

@@ -1,7 +1,7 @@
-use anyhow::Result;
 use crate::config::Config;
+use crate::errors::{BackupServiceError, Result};
 use crate::helpers::{PathMapper, ResticCommand};
-use crate::utils::{echo_info, echo_success, echo_warning, echo_error, validate_credentials, BackupServiceError};
+use crate::utils::{echo_info, echo_success, echo_warning, echo_error, validate_credentials};
 use std::path::{Path, PathBuf};
 use indicatif::{ProgressBar, ProgressStyle};
 use colored::Colorize;
@@ -13,10 +13,7 @@ pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result
     config.set_aws_env();
 
     // Validate credentials before doing any backup work
-    if let Err(e) = validate_credentials(&config).await {
-        echo_error("BACKUP ABORTED: Cannot proceed without valid credentials");
-        return Err(anyhow::anyhow!("Credential validation failed: {}", e));
-    }
+    validate_credentials(&config).await?;
 
     // Collect all paths to backup
     let mut all_paths: Vec<PathBuf> = config.backup_paths.clone();
@@ -80,17 +77,8 @@ pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result
         // Initialize repository if needed
         if let Err(e) = restic_cmd.init_if_needed().await {
             match e {
-                BackupServiceError::AuthenticationFailed => {
-                    echo_error("CRITICAL ERROR: Authentication failed during repository initialization!");
-                    echo_error("Your credentials are invalid or have insufficient permissions.");
-                    echo_error("BACKUP ABORTED - Cannot continue without proper access.");
-                    return Err(anyhow::anyhow!("Authentication failed"));
-                }
-                BackupServiceError::NetworkError => {
-                    echo_error("CRITICAL ERROR: Network connection failed!");
-                    echo_error("Cannot connect to repository endpoint.");
-                    echo_error("BACKUP ABORTED - Check your network and endpoint configuration.");
-                    return Err(anyhow::anyhow!("Network error"));
+                BackupServiceError::AuthenticationFailed | BackupServiceError::NetworkError => {
+                    return Err(e);
                 }
                 _ => {
                     echo_warning(&format!("Failed to initialize repository for {}: {}", path.display(), e));
@@ -130,17 +118,8 @@ pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result
                     skip_count += 1;
                 }
             }
-            Err(BackupServiceError::AuthenticationFailed) => {
-                echo_error("CRITICAL ERROR: Authentication failed during backup!");
-                echo_error("Your credentials are invalid or access was denied.");
-                echo_error("BACKUP ABORTED - Cannot continue without proper authentication.");
-                return Err(anyhow::anyhow!("Authentication failed during backup"));
-            }
-            Err(BackupServiceError::NetworkError) => {
-                echo_error("CRITICAL ERROR: Network connection failed during backup!");
-                echo_error("Cannot connect to repository endpoint.");
-                echo_error("BACKUP ABORTED - Check your network connection and endpoint configuration.");
-                return Err(anyhow::anyhow!("Network error during backup"));
+            Err(BackupServiceError::AuthenticationFailed | BackupServiceError::NetworkError) => {
+                return Err(backup_result.unwrap_err());
             }
             Err(e) => {
                 echo_error(&format!("BACKUP FAILED for {}: {}", path.display(), e));

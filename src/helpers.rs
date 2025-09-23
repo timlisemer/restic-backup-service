@@ -1,6 +1,6 @@
-use anyhow::Result;
 use crate::config::Config;
-use crate::utils::{echo_info, echo_success, BackupServiceError};
+use crate::errors::{BackupServiceError, Result};
+use crate::utils::{echo_info, echo_success};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use serde_json::Value;
@@ -84,7 +84,7 @@ impl ResticCommand {
     }
 
     /// Initialize repository if needed
-    pub async fn init_if_needed(&self) -> Result<(), BackupServiceError> {
+    pub async fn init_if_needed(&self) -> Result<()> {
         if !self.repo_exists().await {
             echo_info(&format!("Initializing repository: {}", self.repo_url));
             self.run_command(&["init"]).await?;
@@ -101,7 +101,7 @@ impl ResticCommand {
     }
 
     /// Run backup with exact NixOS parameters
-    pub async fn backup(&self, path: &Path, hostname: &str) -> Result<String, BackupServiceError> {
+    pub async fn backup(&self, path: &Path, hostname: &str) -> Result<String> {
         let path_str = path.to_string_lossy();
         let tag = PathMapper::determine_tag(path);
 
@@ -115,7 +115,7 @@ impl ResticCommand {
     }
 
     /// Get snapshots as JSON
-    pub async fn snapshots(&self, path: Option<&str>) -> Result<Vec<Value>, BackupServiceError> {
+    pub async fn snapshots(&self, path: Option<&str>) -> Result<Vec<Value>> {
         let mut args = vec!["snapshots", "--json"];
         if let Some(p) = path {
             args.extend(&["--path", p]);
@@ -128,7 +128,7 @@ impl ResticCommand {
     }
 
     /// Restore snapshot
-    pub async fn restore(&self, snapshot_id: &str, path: &str, target: &str) -> Result<String, BackupServiceError> {
+    pub async fn restore(&self, snapshot_id: &str, path: &str, target: &str) -> Result<String> {
         self.run_command(&[
             "restore", snapshot_id,
             "--path", path,
@@ -137,7 +137,7 @@ impl ResticCommand {
     }
 
     /// Get repository stats
-    pub async fn stats(&self, path: &str) -> Result<u64, BackupServiceError> {
+    pub async fn stats(&self, path: &str) -> Result<u64> {
         let output = self.run_command(&[
             "stats", "latest",
             "--mode", "raw-data",
@@ -154,7 +154,7 @@ impl ResticCommand {
     }
 
     /// Core command execution with exact NixOS environment setup
-    async fn run_command(&self, args: &[&str]) -> Result<String, BackupServiceError> {
+    async fn run_command(&self, args: &[&str]) -> Result<String> {
         let output = Command::new("restic")
             .args(["--repo", &self.repo_url])
             .args(args)
@@ -163,28 +163,13 @@ impl ResticCommand {
             .env("AWS_DEFAULT_REGION", &self.config.aws_default_region)
             .env("RESTIC_PASSWORD", &self.config.restic_password)
             .output()
-            .map_err(|_| BackupServiceError::CommandFailed("Failed to execute restic".to_string()))?;
+            .map_err(|_| BackupServiceError::CommandNotFound("Failed to execute restic".to_string()))?;
 
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).to_string())
         } else {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
-
-            // Parse stderr to determine error type (exact same logic as utils.rs)
-            if stderr.contains("access denied") || stderr.contains("invalid credentials") ||
-               stderr.contains("authorization") || stderr.contains("forbidden") ||
-               stderr.contains("access key") || stderr.contains("secret key") {
-                Err(BackupServiceError::AuthenticationFailed)
-            } else if stderr.contains("network") || stderr.contains("connection") ||
-                      stderr.contains("timeout") || stderr.contains("unreachable") ||
-                      stderr.contains("dns") {
-                Err(BackupServiceError::NetworkError)
-            } else if stderr.contains("repository") && stderr.contains("not found") {
-                Err(BackupServiceError::RepositoryNotFound(self.repo_url.clone()))
-            } else {
-                let full_stderr = String::from_utf8_lossy(&output.stderr);
-                Err(BackupServiceError::CommandFailed(full_stderr.to_string()))
-            }
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(BackupServiceError::from_stderr(&stderr, &self.repo_url))
         }
     }
 }
@@ -203,7 +188,7 @@ impl RepositoryScanner {
     }
 
     /// List S3 directories with proper error handling
-    pub async fn list_s3_dirs(&self, s3_path: &str) -> Result<Vec<String>, BackupServiceError> {
+    pub async fn list_s3_dirs(&self, s3_path: &str) -> Result<Vec<String>> {
         let s3_bucket = self.config.s3_bucket()
             .map_err(|_| BackupServiceError::InvalidRepository)?;
         let full_path = format!("s3://{}/{}", s3_bucket, s3_path);
@@ -217,7 +202,7 @@ impl RepositoryScanner {
             .env("AWS_SECRET_ACCESS_KEY", &self.config.aws_secret_access_key)
             .env("AWS_DEFAULT_REGION", &self.config.aws_default_region)
             .output()
-            .map_err(|_| BackupServiceError::CommandFailed("Failed to execute aws".to_string()))?;
+            .map_err(|_| BackupServiceError::CommandNotFound("Failed to execute aws".to_string()))?;
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -235,14 +220,8 @@ impl RepositoryScanner {
                 .collect();
             Ok(dirs)
         } else {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
-            if stderr.contains("access denied") || stderr.contains("invalid credentials") {
-                Err(BackupServiceError::AuthenticationFailed)
-            } else if stderr.contains("network") || stderr.contains("connection") {
-                Err(BackupServiceError::NetworkError)
-            } else {
-                Err(BackupServiceError::CommandFailed(String::from_utf8_lossy(&output.stderr).to_string()))
-            }
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(BackupServiceError::from_stderr(&stderr, &full_path))
         }
     }
 
@@ -252,13 +231,13 @@ impl RepositoryScanner {
     }
 
     /// Get available hosts from S3 bucket
-    pub async fn get_hosts(&self) -> Result<Vec<String>, BackupServiceError> {
+    pub async fn get_hosts(&self) -> Result<Vec<String>> {
         let base_path = self.config.s3_base_path();
         self.list_s3_dirs(&base_path).await
     }
 
     /// Scan and collect all repositories for a hostname
-    pub async fn scan_repositories(&self, hostname: &str) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
+    pub async fn scan_repositories(&self, hostname: &str) -> Result<Vec<RepositoryInfo>> {
         let mut repos = Vec::new();
 
         // Scan user home directories
@@ -348,7 +327,7 @@ impl SnapshotCollector {
     }
 
     /// Get snapshots for a repository with count
-    pub async fn get_snapshots(&self, hostname: &str, repo_subpath: &str, native_path: &Path) -> Result<(usize, Vec<SnapshotInfo>), BackupServiceError> {
+    pub async fn get_snapshots(&self, hostname: &str, repo_subpath: &str, native_path: &Path) -> Result<(usize, Vec<SnapshotInfo>)> {
         let repo_url = self.config.get_repo_url(&format!("{}/{}", hostname, repo_subpath));
         let restic_cmd = ResticCommand::new(self.config.clone(), repo_url);
 

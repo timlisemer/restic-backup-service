@@ -1,4 +1,4 @@
-use anyhow::{Result, Context};
+use crate::errors::{BackupServiceError, Result};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::PathBuf;
@@ -19,23 +19,15 @@ impl Config {
     pub fn load() -> Result<Self> {
         dotenv::dotenv().ok();
 
-        let restic_password = env::var("RESTIC_PASSWORD")
-            .context("RESTIC_PASSWORD not found in environment")?;
-
-        let restic_repo_base = env::var("RESTIC_REPO_BASE")
-            .context("RESTIC_REPO_BASE not found in environment")?;
-
-        let aws_access_key_id = env::var("AWS_ACCESS_KEY_ID")
-            .context("AWS_ACCESS_KEY_ID not found in environment")?;
-
-        let aws_secret_access_key = env::var("AWS_SECRET_ACCESS_KEY")
-            .context("AWS_SECRET_ACCESS_KEY not found in environment")?;
+        let restic_password = env::var("RESTIC_PASSWORD")?;
+        let restic_repo_base = env::var("RESTIC_REPO_BASE")?;
+        let aws_access_key_id = env::var("AWS_ACCESS_KEY_ID")?;
+        let aws_secret_access_key = env::var("AWS_SECRET_ACCESS_KEY")?;
 
         let aws_default_region = env::var("AWS_DEFAULT_REGION")
             .unwrap_or_else(|_| "auto".to_string());
 
-        let aws_s3_endpoint = env::var("AWS_S3_ENDPOINT")
-            .context("AWS_S3_ENDPOINT not found in environment")?;
+        let aws_s3_endpoint = env::var("AWS_S3_ENDPOINT")?;
 
         // Parse backup paths from comma-separated list
         let backup_paths = env::var("BACKUP_PATHS")
@@ -90,7 +82,7 @@ impl Config {
                 }
             }
         }
-        anyhow::bail!("Could not extract bucket name from repo base: {}", self.restic_repo_base)
+        Err(BackupServiceError::ConfigurationError(format!("Could not extract bucket name from repo base: {}", self.restic_repo_base)))
     }
 
     /// Get the base path within the bucket (after bucket name)

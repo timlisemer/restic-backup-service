@@ -1,8 +1,8 @@
-use anyhow::Result;
 use crate::config::Config;
 use crate::repository::BackupRepo;
 use crate::helpers::{RepositoryScanner, SnapshotCollector, SnapshotInfo};
-use crate::utils::{echo_info, echo_warning, echo_error, validate_credentials, BackupServiceError};
+use crate::utils::{echo_info, echo_warning, echo_error, validate_credentials};
+use crate::errors::{BackupServiceError, Result};
 use std::collections::HashMap;
 use serde_json::json;
 use colored::Colorize;
@@ -12,10 +12,7 @@ pub async fn list_hosts(config: Config) -> Result<()> {
     config.set_aws_env();
 
     // Validate credentials before trying to list hosts
-    if let Err(e) = validate_credentials(&config).await {
-        echo_error("FAILED TO LIST HOSTS: Cannot access repository");
-        return Err(anyhow::anyhow!("Credential validation failed: {}", e));
-    }
+    validate_credentials(&config).await?;
 
     let scanner = RepositoryScanner::new(config);
     match scanner.get_hosts().await {
@@ -32,7 +29,7 @@ pub async fn list_hosts(config: Config) -> Result<()> {
         Err(e) => {
             echo_error("FAILED TO LIST HOSTS: Repository access error");
             echo_error(&format!("Error: {}", e));
-            return Err(anyhow::anyhow!("Failed to list hosts: {}", e));
+            return Err(e);
         }
     }
 
@@ -58,24 +55,14 @@ pub async fn list_backups(config: Config, host: Option<String>, json_output: boo
         } else {
             echo_error("FAILED TO LIST BACKUPS: Cannot access repository");
         }
-        return Err(anyhow::anyhow!("Credential validation failed: {}", e));
+        return Err(e);
     }
 
     let scanner = RepositoryScanner::new(config.clone());
     let snapshot_collector = SnapshotCollector::new(config.clone());
 
     // Scan all repositories using the unified scanner
-    let repo_infos = match scanner.scan_repositories(&hostname).await {
-        Ok(repos) => repos,
-        Err(BackupServiceError::AuthenticationFailed) => {
-            echo_error("CRITICAL: Authentication failed while scanning repositories!");
-            return Err(anyhow::anyhow!("Authentication failed during repository scan"));
-        }
-        Err(e) => {
-            echo_error(&format!("Failed to scan repositories: {}", e));
-            return Err(anyhow::anyhow!("Repository scan failed: {}", e));
-        }
-    };
+    let repo_infos = scanner.scan_repositories(&hostname).await?;
 
     let mut repos: Vec<BackupRepo> = Vec::new();
     let mut all_snapshots: Vec<SnapshotInfo> = Vec::new();
@@ -91,7 +78,7 @@ pub async fn list_backups(config: Config, host: Option<String>, json_output: boo
             }
             Err(BackupServiceError::AuthenticationFailed) => {
                 echo_error("CRITICAL: Authentication failed while collecting snapshots!");
-                return Err(anyhow::anyhow!("Authentication failed during snapshot collection"));
+                return Err(BackupServiceError::AuthenticationFailed);
             }
             Err(_) => {
                 // Skip repositories that can't be accessed

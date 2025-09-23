@@ -1,4 +1,3 @@
-use anyhow::Result;
 use clap::{Parser, Subcommand};
 use colored::*;
 
@@ -9,6 +8,7 @@ mod helpers;
 mod backup;
 mod list;
 mod restore;
+mod errors;
 
 #[derive(Parser)]
 #[command(name = "restic-backup-service")]
@@ -57,7 +57,7 @@ enum Commands {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     // Load configuration for all commands except init
@@ -90,7 +90,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn init_env_file() -> Result<()> {
+fn init_env_file() -> Result<(), std::io::Error> {
     use std::fs;
     use std::path::Path;
 
