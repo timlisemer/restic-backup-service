@@ -1,35 +1,28 @@
 use crate::config::Config;
-use crate::repository::BackupRepo;
+use crate::errors::Result;
 use crate::helpers::{RepositoryScanner, SnapshotCollector, SnapshotInfo};
-use crate::utils::{echo_info, echo_warning, echo_error, validate_credentials};
-use crate::errors::{BackupServiceError, Result};
-use std::collections::HashMap;
+use crate::repository::BackupRepo;
+use crate::utils::validate_credentials;
 use serde_json::json;
-use colored::Colorize;
+use std::collections::HashMap;
+use tracing::{info, warn};
 
 pub async fn list_hosts(config: Config) -> Result<()> {
-    echo_info("Getting available hosts...");
+    info!("Getting available hosts...");
     config.set_aws_env();
 
     // Validate credentials before trying to list hosts
     validate_credentials(&config).await?;
 
     let scanner = RepositoryScanner::new(config);
-    match scanner.get_hosts().await {
-        Ok(hosts) => {
-            if hosts.is_empty() {
-                echo_warning("No hosts found in backup repository (repository is empty)");
-            } else {
-                println!("\nAvailable hosts:");
-                for host in hosts {
-                    println!("  - {}", host);
-                }
-            }
-        }
-        Err(e) => {
-            echo_error("FAILED TO LIST HOSTS: Repository access error");
-            echo_error(&format!("Error: {}", e));
-            return Err(e);
+    let hosts = scanner.get_hosts().await?;
+
+    if hosts.is_empty() {
+        warn!("No hosts found in backup repository (repository is empty)");
+    } else {
+        println!("\nAvailable hosts:");
+        for host in hosts {
+            println!("  - {}", host);
         }
     }
 
@@ -41,22 +34,11 @@ pub async fn list_backups(config: Config, host: Option<String>, json_output: boo
     config.set_aws_env();
 
     if !json_output {
-        echo_info(&format!("Listing backups for {} from S3 bucket...", hostname.bold()));
+        info!(hostname = %hostname, "Listing backups from S3 bucket");
     }
 
     // Validate credentials before trying to list backups
-    if let Err(e) = validate_credentials(&config).await {
-        if json_output {
-            let error_output = json!({
-                "error": "authentication_failed",
-                "message": format!("Cannot access repository: {}", e)
-            });
-            println!("{}", serde_json::to_string_pretty(&error_output)?);
-        } else {
-            echo_error("FAILED TO LIST BACKUPS: Cannot access repository");
-        }
-        return Err(e);
-    }
+    validate_credentials(&config).await?;
 
     let scanner = RepositoryScanner::new(config.clone());
     let snapshot_collector = SnapshotCollector::new(config.clone());
@@ -69,21 +51,12 @@ pub async fn list_backups(config: Config, host: Option<String>, json_output: boo
 
     // Collect snapshots for each repository
     for repo_info in repo_infos {
-        match snapshot_collector.get_snapshots(&hostname, &repo_info.repo_subpath, &repo_info.native_path).await {
-            Ok((count, snapshots)) => {
-                if count > 0 {
-                    repos.push(BackupRepo::new(repo_info.native_path).with_count(count));
-                    all_snapshots.extend(snapshots);
-                }
-            }
-            Err(BackupServiceError::AuthenticationFailed) => {
-                echo_error("CRITICAL: Authentication failed while collecting snapshots!");
-                return Err(BackupServiceError::AuthenticationFailed);
-            }
-            Err(_) => {
-                // Skip repositories that can't be accessed
-                continue;
-            }
+        let (count, snapshots) = snapshot_collector
+            .get_snapshots(&hostname, &repo_info.repo_subpath, &repo_info.native_path)
+            .await?;
+        if count > 0 {
+            repos.push(BackupRepo::new(repo_info.native_path).with_count(count));
+            all_snapshots.extend(snapshots);
         }
     }
 
@@ -105,34 +78,35 @@ pub async fn list_backups(config: Config, host: Option<String>, json_output: boo
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
         // Display formatted output
-        display_backup_summary(&repos, &all_snapshots);
+        display_backup_summary(&repos, &all_snapshots)?;
     }
 
     Ok(())
 }
 
-
-fn display_backup_summary(repos: &[BackupRepo], snapshots: &[SnapshotInfo]) {
-    println!("\n{}", "BACKUP PATHS SUMMARY:".bold());
-    println!("{}", "====================".bold());
+fn display_backup_summary(
+    repos: &[BackupRepo],
+    snapshots: &[SnapshotInfo],
+) -> crate::errors::Result<()> {
+    println!("\nBACKUP PATHS SUMMARY:");
+    println!("====================");
 
     // Group by category
     let mut categories: HashMap<&str, Vec<&BackupRepo>> = HashMap::new();
     for repo in repos {
-        categories.entry(repo.category())
-            .or_default()
-            .push(repo);
+        categories.entry(repo.category()).or_default().push(repo);
     }
 
     // Display User Home
     let empty_vec = Vec::new();
     let user_repos = categories.get("user_home").unwrap_or(&empty_vec);
-    println!("\n{} ({} paths):", "User Home".cyan(), user_repos.len());
+    println!("\nUser Home ({} paths):", user_repos.len());
     if user_repos.is_empty() {
         println!("  None");
     } else {
         for repo in user_repos {
-            println!("  {:<50} - {} snapshots",
+            println!(
+                "  {:<50} - {} snapshots",
                 repo.native_path.display(),
                 repo.snapshot_count
             );
@@ -141,12 +115,13 @@ fn display_backup_summary(repos: &[BackupRepo], snapshots: &[SnapshotInfo]) {
 
     // Display Docker Volumes
     let docker_repos = categories.get("docker_volume").unwrap_or(&empty_vec);
-    println!("\n{} ({} paths):", "Docker Volumes".cyan(), docker_repos.len());
+    println!("\nDocker Volumes ({} paths):", docker_repos.len());
     if docker_repos.is_empty() {
         println!("  None");
     } else {
         for repo in docker_repos {
-            println!("  {:<50} - {} snapshots",
+            println!(
+                "  {:<50} - {} snapshots",
                 repo.native_path.display(),
                 repo.snapshot_count
             );
@@ -155,12 +130,13 @@ fn display_backup_summary(repos: &[BackupRepo], snapshots: &[SnapshotInfo]) {
 
     // Display System
     let system_repos = categories.get("system").unwrap_or(&empty_vec);
-    println!("\n{} ({} paths):", "System".cyan(), system_repos.len());
+    println!("\nSystem ({} paths):", system_repos.len());
     if system_repos.is_empty() {
         println!("  None");
     } else {
         for repo in system_repos {
-            println!("  {:<50} - {} snapshots",
+            println!(
+                "  {:<50} - {} snapshots",
                 repo.native_path.display(),
                 repo.snapshot_count
             );
@@ -168,8 +144,8 @@ fn display_backup_summary(repos: &[BackupRepo], snapshots: &[SnapshotInfo]) {
     }
 
     // Display timeline
-    println!("\n{}", "SNAPSHOT TIMELINE:".bold());
-    println!("{}", "==================".bold());
+    println!("\nSNAPSHOT TIMELINE:");
+    println!("==================");
 
     if snapshots.is_empty() {
         println!("No snapshots found");
@@ -188,12 +164,9 @@ fn display_backup_summary(repos: &[BackupRepo], snapshots: &[SnapshotInfo]) {
 
         for time in times.iter().take(20) {
             if let Some(snaps) = timeline.get(time) {
-                println!("\n{}:", time.green());
+                println!("\n{}:", time);
                 for snap in snaps {
-                    println!("  - {:<50} (id: {})",
-                        snap.path.display(),
-                        snap.id
-                    );
+                    println!("  - {:<50} (id: {})", snap.path.display(), snap.id);
                 }
             }
         }
@@ -204,5 +177,5 @@ fn display_backup_summary(repos: &[BackupRepo], snapshots: &[SnapshotInfo]) {
     }
 
     println!();
+    Ok(())
 }
-

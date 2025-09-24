@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use colored::*;
+use tracing::{info, warn};
 
 mod config;
 mod repository;
@@ -56,8 +56,35 @@ enum Commands {
     Init,
 }
 
+fn init_logging() -> crate::errors::Result<()> {
+    use tracing_subscriber::{EnvFilter, fmt::writer::MakeWriterExt};
+    use tracing_appender::rolling;
+
+    // Create logs directory if it doesn't exist
+    std::fs::create_dir_all("./logs")?;
+
+    let file_appender = rolling::daily("./logs", "restic-backup.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stdout.and(non_blocking))
+        .with_env_filter(env_filter)
+        .init();
+
+    // Keep the guard alive
+    std::mem::forget(_guard);
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize logging first
+    init_logging()?;
+
     let cli = Cli::parse();
 
     // Load configuration for all commands except init
@@ -90,16 +117,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn init_env_file() -> Result<(), std::io::Error> {
+fn init_env_file() -> crate::errors::Result<()> {
     use std::fs;
     use std::path::Path;
 
     let env_file = ".env";
     if Path::new(env_file).exists() {
-        println!("{} {} already exists. Not overwriting.",
-            "[WARNING]".yellow().bold(),
-            env_file
-        );
+        warn!(file = %env_file, ".env file already exists, not overwriting");
         return Ok(());
     }
 
@@ -127,9 +151,7 @@ BACKUP_PATHS=/home/user/important_data
 "#;
 
     fs::write(env_file, content)?;
-    println!("{} Created sample .env file. Please edit it with your actual credentials.",
-        "[SUCCESS]".green().bold()
-    );
+    info!(file = %env_file, "Created sample .env file, please edit with your actual credentials");
 
     Ok(())
 }

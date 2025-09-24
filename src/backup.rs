@@ -1,14 +1,14 @@
 use crate::config::Config;
-use crate::errors::{BackupServiceError, Result};
+use crate::errors::Result;
 use crate::helpers::{PathMapper, ResticCommand};
-use crate::utils::{echo_info, echo_success, echo_warning, echo_error, validate_credentials};
+use crate::utils::validate_credentials;
 use std::path::{Path, PathBuf};
 use indicatif::{ProgressBar, ProgressStyle};
-use colored::Colorize;
+use tracing::{info, warn, error};
 
 pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result<()> {
     let hostname = &config.hostname.clone();
-    echo_info(&format!("Starting backup process for host: {}", hostname.bold()));
+    info!(hostname = %hostname, "Starting backup process");
 
     config.set_aws_env();
 
@@ -26,7 +26,7 @@ pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result
     // Add docker volumes if directory exists
     let docker_volumes_path = Path::new("/mnt/docker-data/volumes");
     if docker_volumes_path.exists() {
-        echo_info("Detecting docker volumes...");
+        info!("Detecting docker volumes...");
         if let Ok(entries) = std::fs::read_dir(docker_volumes_path) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -44,7 +44,7 @@ pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result
     }
 
     if all_paths.is_empty() {
-        echo_warning("No paths configured for backup. Use BACKUP_PATHS in .env or specify paths via command line.");
+        warn!("No paths configured for backup. Use BACKUP_PATHS in .env or specify paths via command line.");
         return Ok(());
     }
 
@@ -65,88 +65,68 @@ pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result
 
         // Check if path exists
         if !path.exists() {
-            echo_warning(&format!("Path does not exist, skipping: {}", path.display()));
+            warn!(path = %path.display(), "Path does not exist, skipping");
             skip_count += 1;
             continue;
         }
 
-        let repo_subpath = PathMapper::path_to_repo_subpath(path);
+        let repo_subpath = PathMapper::path_to_repo_subpath(path)?;
         let repo_url = config.get_repo_url(&repo_subpath);
         let restic_cmd = ResticCommand::new(config.clone(), repo_url);
 
         // Initialize repository if needed
-        if let Err(e) = restic_cmd.init_if_needed().await {
-            match e {
-                BackupServiceError::AuthenticationFailed | BackupServiceError::NetworkError => {
-                    return Err(e);
-                }
-                _ => {
-                    echo_warning(&format!("Failed to initialize repository for {}: {}", path.display(), e));
-                    skip_count += 1;
-                    continue;
-                }
-            }
-        }
+        restic_cmd.init_if_needed().await?;
 
         // Run backup using ResticCommand helper
-        let backup_result = restic_cmd.backup(path, hostname).await;
+        let output = restic_cmd.backup(path, hostname).await?;
 
-        match backup_result {
-            Ok(output) => {
-                if output.contains("snapshot") && output.contains("saved") {
-                    // Extract snapshot ID
-                    let snapshot_id = output
-                        .lines()
-                        .find(|line| line.contains("snapshot") && line.contains("saved"))
-                        .and_then(|line| line.split_whitespace().nth(1))
-                        .unwrap_or("unknown");
+        if output.contains("snapshot") && output.contains("saved") {
+            // Extract snapshot ID
+            let snapshot_id = output
+                .lines()
+                .find(|line| line.contains("snapshot") && line.contains("saved"))
+                .and_then(|line| line.split_whitespace().nth(1))
+                .unwrap_or("unknown");
 
-                    if output.contains("at least one source file could not be read") {
-                        echo_warning(&format!(
-                            "Backed up: {} (snapshot {}) - some files skipped due to I/O errors",
-                            path.display(), snapshot_id
-                        ));
-                    } else {
-                        echo_success(&format!(
-                            "Backed up: {} (snapshot {})",
-                            path.display(), snapshot_id
-                        ));
-                    }
-                    success_count += 1;
-                } else {
-                    echo_warning(&format!("Failed to backup: {}", path.display()));
-                    skip_count += 1;
-                }
+            if output.contains("at least one source file could not be read") {
+                warn!(
+                    path = %path.display(),
+                    snapshot_id = %snapshot_id,
+                    "Backed up with some files skipped due to I/O errors"
+                );
+            } else {
+                info!(
+                    path = %path.display(),
+                    snapshot_id = %snapshot_id,
+                    "Backup completed"
+                );
             }
-            Err(BackupServiceError::AuthenticationFailed | BackupServiceError::NetworkError) => {
-                return Err(backup_result.unwrap_err());
-            }
-            Err(e) => {
-                echo_error(&format!("BACKUP FAILED for {}: {}", path.display(), e));
-                echo_warning("Continuing with remaining paths...");
-                skip_count += 1;
-            }
+            success_count += 1;
+        } else {
+            warn!(path = %path.display(), "Failed to backup");
+            skip_count += 1;
         }
     }
 
     pb.finish_and_clear();
 
     if success_count == 0 && skip_count > 0 {
-        echo_error(&format!(
-            "BACKUP FAILED: 0 successful, {} failed/skipped",
-            skip_count
-        ));
-        echo_error("No data was backed up! Please check the errors above.");
+        error!(
+            success_count = %success_count,
+            skip_count = %skip_count,
+            "BACKUP FAILED: No data was backed up! Please check the errors above"
+        );
     } else if skip_count > 0 {
-        echo_warning(&format!(
-            "Backup partially completed: {} successful, {} failed/skipped",
-            success_count, skip_count
-        ));
+        warn!(
+            success_count = %success_count,
+            skip_count = %skip_count,
+            "Backup partially completed"
+        );
     } else {
-        echo_success(&format!(
-            "Backup completed successfully: {} paths backed up",
-            success_count
-        ));
+        info!(
+            success_count = %success_count,
+            "Backup completed successfully"
+        );
     }
 
     Ok(())

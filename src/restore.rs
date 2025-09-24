@@ -1,12 +1,12 @@
 use crate::config::Config;
-use crate::errors::{BackupServiceError, Result};
+use crate::errors::Result;
 use crate::helpers::{RepositoryScanner, ResticCommand};
-use crate::utils::{echo_error, echo_info, echo_success, echo_warning, validate_credentials};
+use crate::utils::validate_credentials;
 use chrono::{DateTime, Duration, Utc};
-use colored::Colorize;
 use dialoguer::{Confirm, MultiSelect, Select};
 use std::fs;
 use std::path::{Path, PathBuf};
+use tracing::{error, info, warn};
 
 pub async fn restore_interactive(
     config: Config,
@@ -16,9 +16,7 @@ pub async fn restore_interactive(
 ) -> Result<()> {
     config.set_aws_env();
 
-    echo_info("Restic Interactive Restore Tool");
-    println!("{}", "===============================".bold());
-    println!();
+    info!("Restic Interactive Restore Tool");
 
     // Validate credentials before starting restore process
     validate_credentials(&config).await?;
@@ -29,7 +27,7 @@ pub async fn restore_interactive(
     } else {
         let hosts = get_available_hosts(&config).await?;
         if hosts.is_empty() {
-            echo_error("No hosts found in backup repository");
+            error!("No hosts found in backup repository");
             return Ok(());
         }
 
@@ -45,14 +43,14 @@ pub async fn restore_interactive(
         hosts[selection].clone()
     };
 
-    echo_info(&format!("Selected host: {}", selected_host.bold()));
+    info!(host = %selected_host, "Selected host");
 
     // Phase 2: Get backup data
-    echo_info(&format!("Querying backups for {}...", selected_host));
+    info!(host = %selected_host, "Querying backups");
     let backup_data = collect_backup_data(&config, &selected_host).await?;
 
     if backup_data.is_empty() {
-        echo_error(&format!("No backups found for host {}", selected_host));
+        error!(host = %selected_host, "No backups found for host");
         return Ok(());
     }
 
@@ -132,14 +130,11 @@ pub async fn restore_interactive(
     };
 
     if selected_repos.is_empty() {
-        echo_error("No repositories selected");
+        error!("No repositories selected");
         return Ok(());
     }
 
-    echo_info(&format!(
-        "Selected {} repositories for restoration",
-        selected_repos.len()
-    ));
+    info!(repo_count = %selected_repos.len(), "Selected repositories for restoration");
 
     // Phase 4: Timestamp selection
     let selected_timestamp = if let Some(ts) = timestamp_opt {
@@ -156,7 +151,7 @@ pub async fn restore_interactive(
         all_timestamps.dedup();
 
         if all_timestamps.is_empty() {
-            echo_error("No snapshots found for selected repositories");
+            error!("No snapshots found for selected repositories");
             return Ok(());
         }
 
@@ -196,13 +191,7 @@ pub async fn restore_interactive(
         window_times[selection]
     };
 
-    echo_info(&format!(
-        "Selected time window: {}",
-        selected_timestamp
-            .format("%Y-%m-%d %H:%M")
-            .to_string()
-            .bold()
-    ));
+    info!(timestamp = %selected_timestamp.format("%Y-%m-%d %H:%M"), "🕐 Selected time window");
 
     // Phase 5: Restoration
     let dest_dir = PathBuf::from("/tmp/restic/interactive");
@@ -210,17 +199,14 @@ pub async fn restore_interactive(
     // Check if destination exists
     if dest_dir.exists() {
         if fs::read_dir(&dest_dir)?.next().is_some() {
-            echo_warning(&format!(
-                "Destination directory {} is not empty",
-                dest_dir.display()
-            ));
+            warn!(destination = %dest_dir.display(), "Destination directory is not empty");
 
             if !Confirm::new()
                 .with_prompt("Continue and clear the directory?")
                 .default(false)
                 .interact()?
             {
-                echo_error("Operation cancelled by user");
+                error!("Operation cancelled by user");
                 return Ok(());
             }
         }
@@ -228,20 +214,17 @@ pub async fn restore_interactive(
     }
     fs::create_dir_all(&dest_dir)?;
 
-    echo_info(&format!(
-        "Restoring to: {}",
-        dest_dir.display().to_string().bold()
-    ));
+    info!(destination = %dest_dir.display(), "Restoring to destination");
 
     let mut restored_count = 0;
     let mut skipped_count = 0;
 
     for repo in &selected_repos {
-        echo_info(&format!(
-            "Restoring {} from {}",
-            repo.path.display().to_string().bold(),
-            repo.repo_subpath.bold()
-        ));
+        info!(
+            path = %repo.path.display(),
+            repo_subpath = %repo.repo_subpath,
+            "Restoring repository"
+        );
 
         let repo_url = config.get_repo_url(&repo.repo_subpath);
 
@@ -270,58 +253,32 @@ pub async fn restore_interactive(
                 )
                 .await;
 
-            match result {
-                Ok(_) => {
-                    echo_success(&format!(
-                        "Restored {} from snapshot {} at {}",
-                        repo.path.display(),
-                        snapshot.id,
-                        snapshot.time.format("%Y-%m-%d %H:%M:%S")
-                    ));
-                    restored_count += 1;
-                }
-                Err(
-                    BackupServiceError::AuthenticationFailed | BackupServiceError::NetworkError,
-                ) => {
-                    return Err(result.unwrap_err());
-                }
-                Err(e) => {
-                    echo_error(&format!(
-                        "RESTORE FAILED for {}: {}",
-                        repo.path.display(),
-                        e
-                    ));
-                    echo_warning("Continuing with remaining repositories...");
-                    skipped_count += 1;
-                }
-            }
+            result?;
+            info!(
+                path = %repo.path.display(),
+                snapshot_id = %snapshot.id,
+                timestamp = %snapshot.time.format("%Y-%m-%d %H:%M:%S"),
+                "Restore completed"
+            );
+            restored_count += 1;
         } else {
-            echo_warning(&format!(
-                "No suitable snapshots found for {}",
-                repo.path.display()
-            ));
+            warn!(
+                path = %repo.path.display(),
+                "No suitable snapshots found"
+            );
             skipped_count += 1;
         }
     }
 
-    println!();
-    echo_info("Restoration Summary:");
-    echo_info(&format!(
-        "  Successfully restored: {} repositories",
-        restored_count
-    ));
-    echo_info(&format!("  Skipped: {} repositories", skipped_count));
-    echo_info(&format!(
-        "  Destination: {}",
-        dest_dir.display().to_string().bold()
-    ));
+    info!(
+        restored_count = %restored_count,
+        skipped_count = %skipped_count,
+        destination = %dest_dir.display(),
+        "Restoration Summary"
+    );
 
     if restored_count > 0 {
-        echo_success("Restoration completed successfully!");
-        echo_info(&format!(
-            "You can now access your restored files at {}",
-            dest_dir.display()
-        ));
+        info!(destination = %dest_dir.display(), "Restoration completed successfully! You can now access your restored files");
 
         // Offer to move/copy files
         println!();
@@ -339,7 +296,7 @@ pub async fn restore_interactive(
 
         match selection {
             0 => {
-                echo_info("Copying files to original locations...");
+                info!("Copying files to original locations...");
                 // Implement copy logic
                 for repo in &selected_repos {
                     let src = dest_dir.join(repo.path.strip_prefix("/").unwrap_or(&repo.path));
@@ -353,15 +310,15 @@ pub async fn restore_interactive(
                             .output()?;
 
                         if result.status.success() {
-                            echo_success(&format!("Copied {}", repo.path.display()));
+                            info!(path = %repo.path.display(), "Copied");
                         } else {
-                            echo_error(&format!("Failed to copy {}", repo.path.display()));
+                            error!(path = %repo.path.display(), "Failed to copy");
                         }
                     }
                 }
             }
             1 => {
-                echo_info("Moving files to original locations...");
+                info!("Moving files to original locations...");
                 // Similar to copy but with mv command
                 for repo in &selected_repos {
                     let src = dest_dir.join(repo.path.strip_prefix("/").unwrap_or(&repo.path));
@@ -372,22 +329,16 @@ pub async fn restore_interactive(
                         let parent = repo.path.parent().unwrap_or(Path::new("/"));
                         fs::create_dir_all(parent)?;
                         fs::rename(&src, &repo.path)?;
-                        echo_success(&format!("Moved {}", repo.path.display()));
+                        info!(path = %repo.path.display(), "Moved");
                     }
                 }
                 fs::remove_dir_all(&dest_dir).ok();
             }
             2 => {
-                echo_info(&format!(
-                    "Files remain at temporary location: {}",
-                    dest_dir.display()
-                ));
+                info!(location = %dest_dir.display(), "Files remain at temporary location");
             }
             _ => {
-                echo_info(&format!(
-                    "Files remain at temporary location: {}",
-                    dest_dir.display()
-                ));
+                info!(location = %dest_dir.display(), "Files remain at temporary location");
             }
         }
     }
@@ -424,25 +375,13 @@ async fn collect_backup_data(config: &Config, hostname: &str) -> Result<Vec<Rest
 
     // Get snapshots for each repository
     for repo_info in repo_infos {
-        match get_repo_snapshots(config, hostname, &repo_info.repo_subpath).await {
-            Ok(Some(snapshots)) => {
-                repos.push(RestoreRepo {
-                    path: repo_info.native_path,
-                    repo_subpath: repo_info.repo_subpath,
-                    category: repo_info.category,
-                    snapshots,
-                });
-            }
-            Ok(None) => {
-                // No snapshots in this repository - skip it
-            }
-            Err(BackupServiceError::AuthenticationFailed) => {
-                return Err(BackupServiceError::AuthenticationFailed);
-            }
-            Err(_) => {
-                // Skip repositories that can't be accessed
-                continue;
-            }
+        if let Some(snapshots) = get_repo_snapshots(config, hostname, &repo_info.repo_subpath).await? {
+            repos.push(RestoreRepo {
+                path: repo_info.native_path,
+                repo_subpath: repo_info.repo_subpath,
+                category: repo_info.category,
+                snapshots,
+            });
         }
     }
 
