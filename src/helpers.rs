@@ -21,6 +21,16 @@ impl RepositoryScanner {
         Ok(Self { config })
     }
 
+    /// Construct S3 path without double slashes
+    fn build_s3_path(&self, hostname: &str, category: &str) -> Result<String, BackupServiceError> {
+        let base_path = self.config.s3_base_path()?;
+        if base_path.is_empty() {
+            Ok(format!("{}/{}", hostname, category))
+        } else {
+            Ok(format!("{}/{}/{}", base_path, hostname, category))
+        }
+    }
+
     /// List S3 directories with proper error handling
     pub async fn list_s3_dirs(&self, s3_path: &str) -> Result<Vec<String>, BackupServiceError> {
         let s3_bucket = self.config.s3_bucket()?;
@@ -92,7 +102,7 @@ impl RepositoryScanner {
         hostname: &str,
     ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
         let mut repos = Vec::new();
-        let user_home_path = format!("{}/{}/user_home", self.config.s3_base_path()?, hostname);
+        let user_home_path = self.build_s3_path(hostname, "user_home")?;
 
         if let Ok(users) = self.list_s3_dirs(&user_home_path).await {
             for user in users {
@@ -123,7 +133,7 @@ impl RepositoryScanner {
         hostname: &str,
     ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
         let mut repos = Vec::new();
-        let docker_path = format!("{}/{}/docker_volume", self.config.s3_base_path()?, hostname);
+        let docker_path = self.build_s3_path(hostname, "docker_volume")?;
 
         if let Ok(volumes) = self.list_s3_dirs(&docker_path).await {
             for volume in volumes {
@@ -147,7 +157,7 @@ impl RepositoryScanner {
         hostname: &str,
     ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
         let mut repos = Vec::new();
-        let system_path = format!("{}/{}/system", self.config.s3_base_path()?, hostname);
+        let system_path = self.build_s3_path(hostname, "system")?;
 
         if let Ok(paths) = self.list_s3_dirs(&system_path).await {
             for path in paths {
@@ -228,13 +238,10 @@ impl SnapshotCollector {
     /// Get snapshots for a repository with count
     pub async fn get_snapshots(
         &self,
-        hostname: &str,
         repo_subpath: &str,
         native_path: &Path,
     ) -> Result<(usize, Vec<SnapshotInfo>), BackupServiceError> {
-        let repo_url = self
-            .config
-            .get_repo_url(&format!("{}/{}", hostname, repo_subpath))?;
+        let repo_url = self.config.get_repo_url(repo_subpath)?;
         let restic_cmd = ResticCommandExecutor::new(self.config.clone(), repo_url)?;
 
         let snapshots = restic_cmd
@@ -319,15 +326,15 @@ mod tests {
             "usr",
             "var",
             "etc",
-            "data_backup", // Similar but not exact
-            "index.html",  // File-like names
-            "keys_backup", // Similar but not exact
+            "data_backup",   // Similar but not exact
+            "index.html",    // File-like names
+            "keys_backup",   // Similar but not exact
             "snapshots_old", // Similar but not exact
-            "locks.txt",   // Similar but not exact
-            "",            // Empty string
-            "DATA",        // Wrong case
-            "Index",       // Wrong case
-            "SNAPSHOTS",   // Wrong case
+            "locks.txt",     // Similar but not exact
+            "",              // Empty string
+            "DATA",          // Wrong case
+            "Index",         // Wrong case
+            "SNAPSHOTS",     // Wrong case
         ];
 
         for dir in invalid_dirs {
@@ -387,8 +394,16 @@ mod tests {
     fn test_repository_info_various_categories() {
         // Test different category types
         let test_cases = vec![
-            ("/home/alice/projects", "user_home/alice/projects", "user_home"),
-            ("/mnt/docker-data/volumes/postgres", "docker_volume/postgres", "docker_volume"),
+            (
+                "/home/alice/projects",
+                "user_home/alice/projects",
+                "user_home",
+            ),
+            (
+                "/mnt/docker-data/volumes/postgres",
+                "docker_volume/postgres",
+                "docker_volume",
+            ),
             ("/etc/nginx", "system/etc_nginx", "system"),
             ("/var/log/app", "system/var_log_app", "system"),
             ("/usr/local/bin", "system/usr_local_bin", "system"),
@@ -529,37 +544,30 @@ mod tests {
             "/usr/local/bin/custom-script",
             "/opt/software/version-1.2.3",
             "/home/user123/Downloads/file.tar.gz",
-
             // Comprehensive whitespace scenarios
             // Gaming directories
             "/home/gamer/.local/share/Paradox Interactive",
             "/home/user/.steam/steam/steamapps/common/Grand Theft Auto V",
             "/home/player/Games/World of Warcraft/Interface/AddOns",
-
             // Application directories
             "/home/user/.config/Google Chrome",
             "/home/developer/.local/share/JetBrains Toolbox",
             "/home/designer/Adobe After Effects 2024",
-
             // Document and media folders
             "/home/user/Documents/Important Business Files",
             "/home/user/Music/Classical Music Collection",
             "/home/user/Videos/Home Movies 2024",
-
             // Docker volumes with spaces
             "/mnt/docker-data/volumes/my app data",
             "/mnt/docker-data/volumes/web server config",
             "/mnt/docker-data/volumes/database backup files",
-
             // System paths with spaces
             "/usr/share/applications/Visual Studio Code",
             "/opt/Google Chrome",
             "/var/log/system events",
-
             // Edge cases with multiple spaces
             "/home/user/My    Project    Files",
             "/home/user/App  With  Multiple  Spaces",
-
             // Leading and trailing spaces
             "/home/user/ leading space",
             "/home/user/trailing space ",
@@ -578,8 +586,11 @@ mod tests {
 
             // Verify that whitespace is preserved in the path
             if path_str.contains(' ') {
-                assert!(repo_info.native_path.to_string_lossy().contains(' '),
-                    "Whitespace should be preserved in path: {}", path_str);
+                assert!(
+                    repo_info.native_path.to_string_lossy().contains(' '),
+                    "Whitespace should be preserved in path: {}",
+                    path_str
+                );
             }
         }
     }
@@ -593,11 +604,11 @@ mod tests {
 
         // Test various ID formats
         let id_formats = vec![
-            "abc123def456",           // Standard hex
-            "12345678",               // Numbers only
-            "short",                  // Short ID
+            "abc123def456",                             // Standard hex
+            "12345678",                                 // Numbers only
+            "short",                                    // Short ID
             "very-long-id-with-dashes-and-numbers-123", // Long with dashes
-            "mixed_123-ABC_def",      // Mixed case and symbols
+            "mixed_123-ABC_def",                        // Mixed case and symbols
         ];
 
         for id in id_formats {
@@ -624,7 +635,6 @@ mod tests {
             "my_volume",
             "volume123",
             "complex-name-with-dashes",
-
             // Whitespace docker volume names
             "my app data",
             "web server config",
@@ -653,8 +663,11 @@ mod tests {
 
             // Verify whitespace is preserved in volume names with spaces
             if volume.contains(' ') {
-                assert!(repo_info.native_path.to_string_lossy().contains(' '),
-                    "Whitespace should be preserved in docker volume: {}", volume);
+                assert!(
+                    repo_info.native_path.to_string_lossy().contains(' '),
+                    "Whitespace should be preserved in docker volume: {}",
+                    volume
+                );
             }
         }
     }
@@ -665,11 +678,19 @@ mod tests {
         let test_scenarios = vec![
             // Original scenario
             ("myapp", vec!["config", "data", "logs", "backups"]),
-
             // Whitespace volume with nested repos
-            ("my app data", vec!["config files", "user data", "backup storage", "temp files"]),
-            ("web server", vec!["apache config", "ssl certificates", "site data"]),
-            ("game server", vec!["world saves", "player data", "mod configs"]),
+            (
+                "my app data",
+                vec!["config files", "user data", "backup storage", "temp files"],
+            ),
+            (
+                "web server",
+                vec!["apache config", "ssl certificates", "site data"],
+            ),
+            (
+                "game server",
+                vec!["world saves", "player data", "mod configs"],
+            ),
         ];
 
         for (volume, nested_repos) in test_scenarios {
@@ -692,17 +713,92 @@ mod tests {
 
                 // Verify path structure
                 assert!(repo_info.native_path.to_string_lossy().contains(volume));
-                assert!(repo_info.native_path.to_string_lossy().contains(nested_repo));
-                assert!(repo_info.repo_subpath.contains(&format!("{}/{}", volume, nested_repo)));
+                assert!(repo_info
+                    .native_path
+                    .to_string_lossy()
+                    .contains(nested_repo));
+                assert!(repo_info
+                    .repo_subpath
+                    .contains(&format!("{}/{}", volume, nested_repo)));
 
                 // Verify whitespace preservation
                 if volume.contains(' ') || nested_repo.contains(' ') {
                     let path_str = repo_info.native_path.to_string_lossy();
-                    assert!(path_str.contains(' '),
+                    assert!(
+                        path_str.contains(' '),
                         "Whitespace should be preserved in nested path: volume='{}', nested='{}'",
-                        volume, nested_repo);
+                        volume,
+                        nested_repo
+                    );
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_s3_path_construction_no_double_slash() -> Result<(), BackupServiceError> {
+        // Test that S3 path construction doesn't create double slashes
+        use crate::config::Config;
+
+        // Test with empty base path (common case)
+        let config_empty_base = Config {
+            restic_password: "test".to_string(),
+            restic_repo_base: "s3:https://example.com/bucket".to_string(), // Empty base path
+            aws_access_key_id: "test".to_string(),
+            aws_secret_access_key: "test".to_string(),
+            aws_default_region: "auto".to_string(),
+            aws_s3_endpoint: "https://example.com".to_string(),
+            backup_paths: vec![],
+            hostname: "test-host".to_string(),
+        };
+
+        let scanner = RepositoryScanner::new(config_empty_base)?;
+        assert_eq!(
+            scanner.build_s3_path("tim-pc", "user_home")?,
+            "tim-pc/user_home"
+        );
+        assert_eq!(
+            scanner.build_s3_path("tim-pc", "docker_volume")?,
+            "tim-pc/docker_volume"
+        );
+        assert_eq!(scanner.build_s3_path("tim-pc", "system")?, "tim-pc/system");
+
+        // Test with non-empty base path
+        let config_with_base = Config {
+            restic_password: "test".to_string(),
+            restic_repo_base: "s3:https://example.com/bucket/restic".to_string(), // Non-empty base path
+            aws_access_key_id: "test".to_string(),
+            aws_secret_access_key: "test".to_string(),
+            aws_default_region: "auto".to_string(),
+            aws_s3_endpoint: "https://example.com".to_string(),
+            backup_paths: vec![],
+            hostname: "test-host".to_string(),
+        };
+
+        let scanner_with_base = RepositoryScanner::new(config_with_base)?;
+        assert_eq!(
+            scanner_with_base.build_s3_path("tim-pc", "user_home")?,
+            "restic/tim-pc/user_home"
+        );
+        assert_eq!(
+            scanner_with_base.build_s3_path("tim-pc", "docker_volume")?,
+            "restic/tim-pc/docker_volume"
+        );
+        assert_eq!(
+            scanner_with_base.build_s3_path("tim-pc", "system")?,
+            "restic/tim-pc/system"
+        );
+
+        // Test various hostname formats
+        assert_eq!(
+            scanner.build_s3_path("host-with-dashes", "user_home")?,
+            "host-with-dashes/user_home"
+        );
+        assert_eq!(
+            scanner.build_s3_path("host123", "user_home")?,
+            "host123/user_home"
+        );
+
+        Ok(())
     }
 }

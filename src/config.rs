@@ -366,4 +366,48 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_backup_paths_parsing() -> Result<(), BackupServiceError> {
+        // Test parsing of comma-separated backup paths similar to NixOS style
+        use std::env;
+
+        // Set up test environment variable
+        let test_paths = "/home/user/Projects,/home/user/Downloads,/home/user/.config,/home/user/.steam,/home/user/.local/share/Paradox Interactive,/home/user/.local/share/Steam/steamapps/common/My Game";
+        env::set_var("BACKUP_PATHS", test_paths);
+
+        // Test parsing
+        let parsed_paths: Vec<PathBuf> = env::var("BACKUP_PATHS")
+            .unwrap_or_default()
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(|s| PathBuf::from(s.trim()))
+            .collect();
+
+        assert_eq!(parsed_paths.len(), 6);
+        assert_eq!(parsed_paths[0], PathBuf::from("/home/user/Projects"));
+        assert_eq!(parsed_paths[1], PathBuf::from("/home/user/Downloads"));
+        assert_eq!(parsed_paths[2], PathBuf::from("/home/user/.config"));
+        assert_eq!(parsed_paths[3], PathBuf::from("/home/user/.steam"));
+        assert_eq!(parsed_paths[4], PathBuf::from("/home/user/.local/share/Paradox Interactive"));
+        assert_eq!(parsed_paths[5], PathBuf::from("/home/user/.local/share/Steam/steamapps/common/My Game"));
+
+        // Test empty paths filtering
+        env::set_var("BACKUP_PATHS", "/path1,,/path2,  ,/path3");
+        let filtered_paths: Vec<PathBuf> = env::var("BACKUP_PATHS")
+            .unwrap_or_default()
+            .split(',')
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| PathBuf::from(s.trim()))
+            .collect();
+
+        assert_eq!(filtered_paths.len(), 3);
+        assert_eq!(filtered_paths[0], PathBuf::from("/path1"));
+        assert_eq!(filtered_paths[1], PathBuf::from("/path2"));
+        assert_eq!(filtered_paths[2], PathBuf::from("/path3"));
+
+        // Clean up
+        env::remove_var("BACKUP_PATHS");
+        Ok(())
+    }
 }

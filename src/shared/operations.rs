@@ -42,7 +42,7 @@ impl RepositoryOperations {
         for repo_info in repo_infos {
             let (count, snapshots) = self
                 .snapshot_collector
-                .get_snapshots(hostname, &repo_info.repo_subpath, &repo_info.native_path)
+                .get_snapshots(&repo_info.repo_subpath, &repo_info.native_path)
                 .await?;
 
             if count > 0 {
@@ -105,7 +105,11 @@ mod tests {
         }
     }
 
-    fn create_test_repo_info(native_path: &str, repo_subpath: &str, category: &str) -> RepositoryInfo {
+    fn create_test_repo_info(
+        native_path: &str,
+        repo_subpath: &str,
+        category: &str,
+    ) -> RepositoryInfo {
         RepositoryInfo {
             native_path: PathBuf::from(native_path),
             repo_subpath: repo_subpath.to_string(),
@@ -153,17 +157,27 @@ mod tests {
                 "user_home/tim/.local_share_My Documents",
                 "user_home",
                 vec![
-                    create_test_snapshot("2025-01-15T10:30:00Z", "/home/tim/.local/share/My Documents", "snap1"),
-                    create_test_snapshot("2025-01-15T11:00:00Z", "/home/tim/.local/share/My Documents", "snap2"),
+                    create_test_snapshot(
+                        "2025-01-15T10:30:00Z",
+                        "/home/tim/.local/share/My Documents",
+                        "snap1",
+                    ),
+                    create_test_snapshot(
+                        "2025-01-15T11:00:00Z",
+                        "/home/tim/.local/share/My Documents",
+                        "snap2",
+                    ),
                 ],
             ),
             create_test_repo_data(
                 "/mnt/docker-data/volumes/postgres backup",
                 "docker_volume/postgres backup",
                 "docker_volume",
-                vec![
-                    create_test_snapshot("2025-01-15T09:30:00Z", "/mnt/docker-data/volumes/postgres backup", "snap3"),
-                ],
+                vec![create_test_snapshot(
+                    "2025-01-15T09:30:00Z",
+                    "/mnt/docker-data/volumes/postgres backup",
+                    "snap3",
+                )],
             ),
             create_test_repo_data(
                 "/etc/systemd/system/my service.service",
@@ -180,17 +194,26 @@ mod tests {
         assert_eq!(backup_repos.len(), 3);
 
         // Check first repo
-        assert_eq!(backup_repos[0].native_path, PathBuf::from("/home/tim/.local/share/My Documents"));
+        assert_eq!(
+            backup_repos[0].native_path,
+            PathBuf::from("/home/tim/.local/share/My Documents")
+        );
         assert_eq!(backup_repos[0].snapshot_count, 2);
         assert_eq!(backup_repos[0].category()?, "user_home");
 
         // Check second repo
-        assert_eq!(backup_repos[1].native_path, PathBuf::from("/mnt/docker-data/volumes/postgres backup"));
+        assert_eq!(
+            backup_repos[1].native_path,
+            PathBuf::from("/mnt/docker-data/volumes/postgres backup")
+        );
         assert_eq!(backup_repos[1].snapshot_count, 1);
         assert_eq!(backup_repos[1].category()?, "docker_volume");
 
         // Check third repo (no snapshots)
-        assert_eq!(backup_repos[2].native_path, PathBuf::from("/etc/systemd/system/my service.service"));
+        assert_eq!(
+            backup_repos[2].native_path,
+            PathBuf::from("/etc/systemd/system/my service.service")
+        );
         assert_eq!(backup_repos[2].snapshot_count, 0);
         assert_eq!(backup_repos[2].category()?, "system");
 
@@ -244,8 +267,16 @@ mod tests {
                 "user_home/user/.config_Google Chrome",
                 "user_home",
                 vec![
-                    create_test_snapshot("2025-01-15T10:30:00Z", "/home/user/.config/Google Chrome", "snap1"),
-                    create_test_snapshot("2025-01-15T11:00:00Z", "/home/user/.config/Google Chrome", "snap2"),
+                    create_test_snapshot(
+                        "2025-01-15T10:30:00Z",
+                        "/home/user/.config/Google Chrome",
+                        "snap1",
+                    ),
+                    create_test_snapshot(
+                        "2025-01-15T11:00:00Z",
+                        "/home/user/.config/Google Chrome",
+                        "snap2",
+                    ),
                 ],
             ),
             create_test_repo_data(
@@ -253,8 +284,16 @@ mod tests {
                 "docker_volume/database backup",
                 "docker_volume",
                 vec![
-                    create_test_snapshot("2025-01-15T09:30:00Z", "/mnt/docker-data/volumes/database backup", "snap3"),
-                    create_test_snapshot("2025-01-15T12:00:00Z", "/mnt/docker-data/volumes/database backup", "snap4"),
+                    create_test_snapshot(
+                        "2025-01-15T09:30:00Z",
+                        "/mnt/docker-data/volumes/database backup",
+                        "snap3",
+                    ),
+                    create_test_snapshot(
+                        "2025-01-15T12:00:00Z",
+                        "/mnt/docker-data/volumes/database backup",
+                        "snap4",
+                    ),
                 ],
             ),
             create_test_repo_data(
@@ -356,9 +395,11 @@ mod tests {
                 "/etc/nginx",
                 "system/etc_nginx",
                 "system",
-                vec![
-                    create_test_snapshot("2025-01-15T10:32:00Z", "/etc/nginx", "third"),
-                ],
+                vec![create_test_snapshot(
+                    "2025-01-15T10:32:00Z",
+                    "/etc/nginx",
+                    "third",
+                )],
             ),
         ];
 
@@ -418,16 +459,32 @@ mod tests {
 
         // Test with mixed categories and different snapshot counts
         let repo_data = vec![
-            create_test_repo_data("/home/alice/projects", "user_home/alice/projects", "user_home",
-                vec![create_test_snapshot("2025-01-15T10:30:00Z", "/home/alice/projects", "snap1")]),
-            create_test_repo_data("/mnt/docker-data/volumes/redis", "docker_volume/redis", "docker_volume",
-                vec![]),
-            create_test_repo_data("/var/log/app", "system/var_log_app", "system",
+            create_test_repo_data(
+                "/home/alice/projects",
+                "user_home/alice/projects",
+                "user_home",
+                vec![create_test_snapshot(
+                    "2025-01-15T10:30:00Z",
+                    "/home/alice/projects",
+                    "snap1",
+                )],
+            ),
+            create_test_repo_data(
+                "/mnt/docker-data/volumes/redis",
+                "docker_volume/redis",
+                "docker_volume",
+                vec![],
+            ),
+            create_test_repo_data(
+                "/var/log/app",
+                "system/var_log_app",
+                "system",
                 vec![
                     create_test_snapshot("2025-01-15T09:00:00Z", "/var/log/app", "snap2"),
                     create_test_snapshot("2025-01-15T10:00:00Z", "/var/log/app", "snap3"),
                     create_test_snapshot("2025-01-15T11:00:00Z", "/var/log/app", "snap4"),
-                ]),
+                ],
+            ),
         ];
 
         let backup_repos = ops.convert_to_backup_repos(repo_data.clone())?;
@@ -504,39 +561,81 @@ mod tests {
                     create_test_snapshot("2025-01-15T07:30:00Z", "/usr/share/applications/Visual Studio Code", "app1"),
                 ],
             ),
+
+            // NixOS-style backup paths (similar to user's configuration)
+            create_test_repo_data(
+                "/home/developer/Coding",
+                "user_home/developer/Coding",
+                "user_home",
+                vec![
+                    create_test_snapshot("2025-01-15T12:00:00Z", "/home/developer/Coding", "code1"),
+                    create_test_snapshot("2025-01-15T12:30:00Z", "/home/developer/Coding", "code2"),
+                ],
+            ),
+            create_test_repo_data(
+                "/home/user/.vscode-server",
+                "user_home/user/.vscode-server",
+                "user_home",
+                vec![
+                    create_test_snapshot("2025-01-15T06:00:00Z", "/home/user/.vscode-server", "vscode1"),
+                ],
+            ),
+            create_test_repo_data(
+                "/home/gamer/.local/share/Steam/steamapps/compatdata/567890/pfx/drive_c/users/steamuser/Documents/Game Data",
+                "user_home/gamer/.local_share_Steam_steamapps_compatdata_567890_pfx_drive_c_users_steamuser_Documents_Game Data",
+                "user_home",
+                vec![
+                    create_test_snapshot("2025-01-15T05:00:00Z", "/home/gamer/.local/share/Steam/steamapps/compatdata/567890/pfx/drive_c/users/steamuser/Documents/Game Data", "steam1"),
+                ],
+            ),
         ];
 
         // Test conversion to BackupRepo format
         let backup_repos = ops.convert_to_backup_repos(repo_data.clone())?;
-        assert_eq!(backup_repos.len(), 4);
+        assert_eq!(backup_repos.len(), 7);
 
         // Verify whitespace paths are handled correctly
-        assert_eq!(backup_repos[0].native_path.display().to_string(), "/home/gamer/.local/share/Paradox Interactive");
+        assert_eq!(
+            backup_repos[0].native_path.display().to_string(),
+            "/home/gamer/.local/share/Paradox Interactive"
+        );
         assert_eq!(backup_repos[0].snapshot_count, 2);
         assert_eq!(backup_repos[0].category()?, "user_home");
 
-        assert_eq!(backup_repos[1].native_path.display().to_string(), "/home/user/.config/Google Chrome");
+        assert_eq!(
+            backup_repos[1].native_path.display().to_string(),
+            "/home/user/.config/Google Chrome"
+        );
         assert_eq!(backup_repos[1].snapshot_count, 1);
         assert_eq!(backup_repos[1].category()?, "user_home");
 
-        assert_eq!(backup_repos[2].native_path.display().to_string(), "/mnt/docker-data/volumes/my app data");
+        assert_eq!(
+            backup_repos[2].native_path.display().to_string(),
+            "/mnt/docker-data/volumes/my app data"
+        );
         assert_eq!(backup_repos[2].snapshot_count, 3);
         assert_eq!(backup_repos[2].category()?, "docker_volume");
 
-        assert_eq!(backup_repos[3].native_path.display().to_string(), "/usr/share/applications/Visual Studio Code");
+        assert_eq!(
+            backup_repos[3].native_path.display().to_string(),
+            "/usr/share/applications/Visual Studio Code"
+        );
         assert_eq!(backup_repos[3].snapshot_count, 1);
         assert_eq!(backup_repos[3].category()?, "system");
 
         // Test snapshot extraction with whitespace paths
         let all_snapshots = ops.extract_all_snapshots(&repo_data);
-        assert_eq!(all_snapshots.len(), 7); // 2 + 1 + 3 + 1
+        assert_eq!(all_snapshots.len(), 11); // 2 + 1 + 3 + 1 + 2 + 1 + 1 (original + NixOS paths)
 
         // Verify snapshot paths contain spaces correctly
-        let snapshot_paths: Vec<String> = all_snapshots.iter()
+        let snapshot_paths: Vec<String> = all_snapshots
+            .iter()
             .map(|s| s.path.display().to_string())
             .collect();
 
-        assert!(snapshot_paths.contains(&"/home/gamer/.local/share/Paradox Interactive".to_string()));
+        assert!(
+            snapshot_paths.contains(&"/home/gamer/.local/share/Paradox Interactive".to_string())
+        );
         assert!(snapshot_paths.contains(&"/home/user/.config/Google Chrome".to_string()));
         assert!(snapshot_paths.contains(&"/mnt/docker-data/volumes/my app data".to_string()));
         assert!(snapshot_paths.contains(&"/usr/share/applications/Visual Studio Code".to_string()));

@@ -574,6 +574,22 @@ mod tests {
             ("/home/user/.local/share/App-Name With Spaces", "user_home/user/.local_share_App-Name With Spaces"),
             ("/home/user/Downloads/Software v2.0 Final", "user_home/user/Downloads_Software v2.0 Final"),
             ("/etc/systemd/system/my-service with spaces.service", "system/etc_systemd_system_my-service with spaces.service"),
+
+            // NixOS-style paths (similar to user's backup configuration)
+            ("/home/alice/Coding", "user_home/alice/Coding"),
+            ("/home/user/Desktop", "user_home/user/Desktop"),
+            ("/home/developer/Documents", "user_home/developer/Documents"),
+            ("/home/gamer/Pictures", "user_home/gamer/Pictures"),
+            ("/home/user/Videos", "user_home/user/Videos"),
+            ("/home/alice/Music", "user_home/alice/Music"),
+            ("/home/user/.config", "user_home/user/.config"),
+            ("/home/dev/.mozilla", "user_home/dev/.mozilla"),
+            ("/home/user/.bash_history", "user_home/user/.bash_history"),
+            ("/home/gamer/.steam", "user_home/gamer/.steam"),
+            ("/home/user/.vscode-server", "user_home/user/.vscode-server"),
+            ("/home/dev/.npm", "user_home/dev/.npm"),
+            ("/home/user/.vscode", "user_home/user/.vscode"),
+            ("/home/gamer/.local/share/Steam/steamapps/compatdata/345678/pfx/drive_c/users/steamuser/Documents/Game Files/accounts/player123", "user_home/gamer/.local_share_Steam_steamapps_compatdata_345678_pfx_drive_c_users_steamuser_Documents_Game Files_accounts_player123"),
         ];
 
         for (input_path, expected_repo) in special_char_tests {

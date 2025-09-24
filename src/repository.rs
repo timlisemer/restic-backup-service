@@ -98,6 +98,16 @@ mod tests {
             "/home/user/Music/My Favorite Songs",
             "/home/gamer/.local/share/Steam Games",
             "/home/user/Videos/Home Movies Collection",
+
+            // NixOS-style paths (similar to user configuration)
+            "/home/developer/Coding",
+            "/home/user/Desktop",
+            "/home/alice/.mozilla",
+            "/home/gamer/.bash_history",
+            "/home/user/.vscode-server",
+            "/home/dev/.npm",
+            "/home/user/.local/share/Steam/steamapps/compatdata/123456/pfx/drive_c/users/steamuser/Documents/My Game/saves",
+            "/home/gamer/.local/share/Steam/steamapps/compatdata/789012/pfx/drive_c/users/steamuser/Documents/Game Title/mods",
         ];
 
         for path_str in test_cases {
