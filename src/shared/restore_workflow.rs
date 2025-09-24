@@ -257,7 +257,7 @@ impl RestoreWorkflow {
 
         info!(destination = %dest_dir.display(), "Restoration completed successfully! You can now access your restored files");
 
-        println!();
+        info!("");
         let actions = vec![
             "Copy to original location (replace existing files)",
             "Move to original location (replace existing files)",

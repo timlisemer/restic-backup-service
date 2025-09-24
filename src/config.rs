@@ -19,7 +19,9 @@ impl Config {
     pub fn load() -> Result<Self, BackupServiceError> {
         dotenv::dotenv().ok();
 
-        let restic_password = env::var("RESTIC_PASSWORD")?;
+        // Manually read RESTIC_PASSWORD to avoid dotenv variable substitution issues
+        let restic_password =
+            Self::read_password_from_env_file().or_else(|_| env::var("RESTIC_PASSWORD"))?;
         let restic_repo_base = env::var("RESTIC_REPO_BASE")?;
         let aws_access_key_id = env::var("AWS_ACCESS_KEY_ID")?;
         let aws_secret_access_key = env::var("AWS_SECRET_ACCESS_KEY")?;
@@ -123,6 +125,50 @@ impl Config {
             self.restic_repo_base, self.hostname, subpath
         ))
     }
+
+    /// Read RESTIC_PASSWORD directly from .env file without variable substitution
+    fn read_password_from_env_file() -> Result<String, BackupServiceError> {
+        use std::fs::File;
+        use std::io::{BufRead, BufReader};
+
+        let file = File::open(".env").map_err(|_| {
+            BackupServiceError::ConfigurationError("Cannot open .env file".to_string())
+        })?;
+
+        let reader = BufReader::new(file);
+
+        for line in reader.lines() {
+            let line = line.map_err(|_| {
+                BackupServiceError::ConfigurationError("Cannot read .env file".to_string())
+            })?;
+
+            // Skip empty lines and comments
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            // Look for RESTIC_PASSWORD line
+            if let Some((key, value)) = line.split_once('=') {
+                if key.trim() == "RESTIC_PASSWORD" {
+                    let password = value.trim();
+                    // Remove surrounding quotes if present
+                    let password = if (password.starts_with('"') && password.ends_with('"'))
+                        || (password.starts_with('\'') && password.ends_with('\''))
+                    {
+                        &password[1..password.len() - 1]
+                    } else {
+                        password
+                    };
+                    return Ok(password.to_string());
+                }
+            }
+        }
+
+        Err(BackupServiceError::ConfigurationError(
+            "RESTIC_PASSWORD not found in .env file".to_string(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -149,8 +195,12 @@ mod tests {
         assert_eq!(config.s3_endpoint()?, "https://bucket.s3.amazonaws.com");
 
         // Test Cloudflare R2 format
-        let config = create_test_config("s3:https://abc123.r2.cloudflarestorage.com/my-bucket/restic");
-        assert_eq!(config.s3_endpoint()?, "https://abc123.r2.cloudflarestorage.com");
+        let config =
+            create_test_config("s3:https://abc123.r2.cloudflarestorage.com/my-bucket/restic");
+        assert_eq!(
+            config.s3_endpoint()?,
+            "https://abc123.r2.cloudflarestorage.com"
+        );
 
         // Test custom endpoint
         let config = create_test_config("s3:https://minio.example.com/bucket");
@@ -186,7 +236,8 @@ mod tests {
         assert_eq!(config.s3_bucket()?, "my-bucket");
 
         // Test Cloudflare R2 format
-        let config = create_test_config("s3:https://abc123.r2.cloudflarestorage.com/bucket-name/restic");
+        let config =
+            create_test_config("s3:https://abc123.r2.cloudflarestorage.com/bucket-name/restic");
         assert_eq!(config.s3_bucket()?, "bucket-name");
 
         // Test bucket with hyphens and numbers
@@ -325,13 +376,20 @@ mod tests {
     #[test]
     fn test_real_world_s3_urls() -> Result<(), BackupServiceError> {
         // Test actual Cloudflare R2 URL from .env
-        let config = create_test_config("s3:https://0338e2011591dfc360150a909e7c2e1c.r2.cloudflarestorage.com/restic");
-        assert_eq!(config.s3_endpoint()?, "https://0338e2011591dfc360150a909e7c2e1c.r2.cloudflarestorage.com");
+        let config = create_test_config(
+            "s3:https://0338e2011591dfc360150a909e7c2e1c.r2.cloudflarestorage.com/restic",
+        );
+        assert_eq!(
+            config.s3_endpoint()?,
+            "https://0338e2011591dfc360150a909e7c2e1c.r2.cloudflarestorage.com"
+        );
         assert_eq!(config.s3_bucket()?, "restic");
         assert_eq!(config.s3_base_path()?, "");
 
         // Test AWS S3 standard URL
-        let config = create_test_config("s3:https://s3.us-west-2.amazonaws.com/my-backup-bucket/restic-backups");
+        let config = create_test_config(
+            "s3:https://s3.us-west-2.amazonaws.com/my-backup-bucket/restic-backups",
+        );
         assert_eq!(config.s3_endpoint()?, "https://s3.us-west-2.amazonaws.com");
         assert_eq!(config.s3_bucket()?, "my-backup-bucket");
         assert_eq!(config.s3_base_path()?, "restic-backups");
@@ -389,8 +447,14 @@ mod tests {
         assert_eq!(parsed_paths[1], PathBuf::from("/home/user/Downloads"));
         assert_eq!(parsed_paths[2], PathBuf::from("/home/user/.config"));
         assert_eq!(parsed_paths[3], PathBuf::from("/home/user/.steam"));
-        assert_eq!(parsed_paths[4], PathBuf::from("/home/user/.local/share/Paradox Interactive"));
-        assert_eq!(parsed_paths[5], PathBuf::from("/home/user/.local/share/Steam/steamapps/common/My Game"));
+        assert_eq!(
+            parsed_paths[4],
+            PathBuf::from("/home/user/.local/share/Paradox Interactive")
+        );
+        assert_eq!(
+            parsed_paths[5],
+            PathBuf::from("/home/user/.local/share/Steam/steamapps/common/My Game")
+        );
 
         // Test empty paths filtering
         env::set_var("BACKUP_PATHS", "/path1,,/path2,  ,/path3");

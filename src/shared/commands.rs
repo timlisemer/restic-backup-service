@@ -67,6 +67,7 @@ impl CommandExecutor {
             .env("AWS_ACCESS_KEY_ID", &self.config.aws_access_key_id)
             .env("AWS_SECRET_ACCESS_KEY", &self.config.aws_secret_access_key)
             .env("AWS_DEFAULT_REGION", &self.config.aws_default_region)
+            .env("AWS_S3_ENDPOINT", &self.config.aws_s3_endpoint)
             .env("RESTIC_PASSWORD", &self.config.restic_password)
             .output()
             .map_err(|_| {
@@ -234,11 +235,13 @@ impl S3CommandExecutor {
             .lines()
             .filter(|line| line.contains("PRE"))
             .map(|line| {
-                line.split_whitespace()
-                    .last()
-                    .unwrap_or("")
-                    .trim_end_matches('/')
-                    .to_string()
+                // Extract directory name after "PRE " prefix, preserving spaces
+                if let Some(start) = line.find("PRE ") {
+                    let dir_name = &line[start + 4..]; // Skip "PRE "
+                    dir_name.trim_end_matches('/').to_string()
+                } else {
+                    String::new()
+                }
             })
             .filter(|d| !d.is_empty())
             .collect();

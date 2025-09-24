@@ -21,9 +21,9 @@ pub async fn list_hosts(config: Config) -> Result<(), BackupServiceError> {
     if hosts.is_empty() {
         warn!("No hosts found in backup repository (repository is empty)");
     } else {
-        println!("\nAvailable hosts:");
+        info!("\nAvailable hosts:");
         for host in hosts {
-            println!("  - {}", host);
+            info!("  - {}", host);
         }
     }
 
@@ -70,7 +70,7 @@ pub async fn list_backups(
                 "id": s.id
             })).collect::<Vec<_>>()
         });
-        println!("{}", serde_json::to_string_pretty(&output)?);
+        info!("{}", serde_json::to_string_pretty(&output)?);
     } else {
         // Display formatted output using modular DisplayFormatter
         DisplayFormatter::display_backup_summary(&repos, &all_snapshots)?;

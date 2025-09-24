@@ -134,7 +134,6 @@ mod tests {
             "/mnt/docker-data/volumes/redis_cache",
             "/mnt/docker-data/volumes/app-volume/nested/path",
             "/mnt/docker-data/volumes/complex-name-123",
-
             // Whitespace docker volume scenarios
             "/mnt/docker-data/volumes/my app data",
             "/mnt/docker-data/volumes/game server config",
@@ -176,7 +175,6 @@ mod tests {
             "/root/.config",
             "/tmp/backup",
             "/srv/www",
-
             // Whitespace system path scenarios
             "/usr/share/applications/My Application",
             "/opt/Google Chrome",
@@ -258,33 +256,45 @@ mod tests {
         let edge_cases = vec![
             // Paths with multiple spaces
             ("/home/user/My    Project    Files", "user_home"),
-            ("/mnt/docker-data/volumes/app  with  spaces", "docker_volume"),
+            (
+                "/mnt/docker-data/volumes/app  with  spaces",
+                "docker_volume",
+            ),
             ("/usr/share/My  Application  Data", "system"),
-
             // Paths with leading/trailing spaces in components
             ("/home/user/ leading space", "user_home"),
             ("/home/user/trailing space ", "user_home"),
             ("/mnt/docker-data/volumes/ docker volume ", "docker_volume"),
-
             // Paths with special whitespace characters (tabs, newlines would be unusual but test robustness)
             ("/home/user/tab\tseparated", "user_home"),
-
             // Mixed special characters and spaces
             ("/home/user/.local/share/App-Name With Spaces", "user_home"),
             ("/mnt/docker-data/volumes/my-app data_v2", "docker_volume"),
-            ("/etc/systemd/system/my-service with spaces.service", "system"),
-
+            (
+                "/etc/systemd/system/my-service with spaces.service",
+                "system",
+            ),
             // Real-world gaming and application paths
-            ("/home/user/.steam/steam/steamapps/common/Counter Strike", "user_home"),
-            ("/home/gamer/.local/share/Paradox Interactive/Europa Universalis IV", "user_home"),
+            (
+                "/home/user/.steam/steam/steamapps/common/Counter Strike",
+                "user_home",
+            ),
+            (
+                "/home/gamer/.local/share/Paradox Interactive/Europa Universalis IV",
+                "user_home",
+            ),
             ("/home/user/.config/Google Chrome", "user_home"),
             ("/home/developer/Projects/My Awesome App", "user_home"),
         ];
 
         for (path, expected_category) in edge_cases {
             let repo = BackupRepo::new(PathBuf::from(path))?;
-            assert_eq!(repo.category()?, expected_category,
-                "Failed for whitespace edge case: {}", path);
+            assert_eq!(
+                repo.category()?,
+                expected_category,
+                "Failed for whitespace edge case: {}",
+                path
+            );
         }
 
         Ok(())
@@ -295,18 +305,22 @@ mod tests {
         // Test complete workflow with different path types including whitespace
 
         // User home workflow with whitespace
-        let user_repo = BackupRepo::new(PathBuf::from("/home/tim/.local/share/My Documents"))?.with_count(15)?;
+        let user_repo = BackupRepo::new(PathBuf::from("/home/tim/.local/share/My Documents"))?
+            .with_count(15)?;
         assert_eq!(user_repo.category()?, "user_home");
         assert_eq!(user_repo.snapshot_count, 15);
 
         // Docker volume workflow with whitespace
-        let docker_repo =
-            BackupRepo::new(PathBuf::from("/mnt/docker-data/volumes/postgres backup data"))?.with_count(8)?;
+        let docker_repo = BackupRepo::new(PathBuf::from(
+            "/mnt/docker-data/volumes/postgres backup data",
+        ))?
+        .with_count(8)?;
         assert_eq!(docker_repo.category()?, "docker_volume");
         assert_eq!(docker_repo.snapshot_count, 8);
 
         // System path workflow with whitespace
-        let system_repo = BackupRepo::new(PathBuf::from("/usr/share/applications/My App"))?.with_count(3)?;
+        let system_repo =
+            BackupRepo::new(PathBuf::from("/usr/share/applications/My App"))?.with_count(3)?;
         assert_eq!(system_repo.category()?, "system");
         assert_eq!(system_repo.snapshot_count, 3);
 

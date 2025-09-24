@@ -140,10 +140,7 @@ mod tests {
 
     #[test]
     fn test_s3_to_native_path() -> Result<(), BackupServiceError> {
-        assert_eq!(
-            PathMapper::s3_to_native_path("documents")?,
-            "documents"
-        );
+        assert_eq!(PathMapper::s3_to_native_path("documents")?, "documents");
         assert_eq!(
             PathMapper::s3_to_native_path("my_deep_path")?,
             "my/deep/path"
@@ -152,10 +149,7 @@ mod tests {
             PathMapper::s3_to_native_path("etc_nginx_conf")?,
             "etc/nginx/conf"
         );
-        assert_eq!(
-            PathMapper::s3_to_native_path("single")?,
-            "single"
-        );
+        assert_eq!(PathMapper::s3_to_native_path("single")?, "single");
         Ok(())
     }
 
@@ -164,23 +158,33 @@ mod tests {
         // Test cases matching original NixOS logic
         let test_cases = vec![
             // Docker volume paths with nested structure
-            ("/mnt/docker-data/volumes/complex/nested/volume", "docker_volume/complex_nested_volume"),
-
+            (
+                "/mnt/docker-data/volumes/complex/nested/volume",
+                "docker_volume/complex_nested_volume",
+            ),
             // System paths with deep nesting
             ("/var/log/nginx/access", "system/var_log_nginx_access"),
-            ("/etc/systemd/system/my-service", "system/etc_systemd_system_my-service"),
-
+            (
+                "/etc/systemd/system/my-service",
+                "system/etc_systemd_system_my-service",
+            ),
             // Edge cases for boundary paths
             ("/mnt/docker-data/volumes/", "docker_volume"),
             ("/", "system"),
-
             // User home with various subdirectories
-            ("/home/user/Projects/rust/my-project", "user_home/user/Projects_rust_my-project"),
+            (
+                "/home/user/Projects/rust/my-project",
+                "user_home/user/Projects_rust_my-project",
+            ),
         ];
 
         for (native_path, expected_repo_path) in test_cases {
             let result = PathMapper::path_to_repo_subpath(Path::new(native_path))?;
-            assert_eq!(result, expected_repo_path, "Failed for path: {}", native_path);
+            assert_eq!(
+                result, expected_repo_path,
+                "Failed for path: {}",
+                native_path
+            );
         }
         Ok(())
     }
@@ -193,11 +197,12 @@ mod tests {
             ("my_file", "my_file"),
             ("docker_volume", "docker_volume"),
             ("backup_data", "backup_data"),
-
             // Multiple underscores (convert to path)
             ("var_log_nginx_access", "var/log/nginx/access"),
-            ("home_user_documents_important", "home/user/documents/important"),
-
+            (
+                "home_user_documents_important",
+                "home/user/documents/important",
+            ),
             // No underscores (unchanged)
             ("documents", "documents"),
             ("projects", "projects"),
@@ -255,7 +260,6 @@ mod tests {
         let edge_cases = vec![
             // Root paths
             ("/", "system"),
-
             // Directory boundaries
             ("/home", "system/home"),
             ("/home/", "user_home/"), // After stripping /home/, empty string splits to [""] -> user_home/
@@ -263,21 +267,32 @@ mod tests {
             ("/mnt/docker-data", "system/mnt_docker-data"),
             ("/mnt/docker-data/", "system/mnt_docker-data_"),
             ("/mnt/docker-data/volumes", "system/mnt_docker-data_volumes"),
-
             // Empty components
             ("/home//user", "user_home//user"), // Matches /home/ prefix, so treated as user_home
             ("//", "system"), // After trimming leading slashes, empty string -> "system"
-
             // Special characters in paths
-            ("/home/user-name/my-project", "user_home/user-name/my-project"),
+            (
+                "/home/user-name/my-project",
+                "user_home/user-name/my-project",
+            ),
             ("/home/user_name/file.txt", "user_home/user_name/file.txt"),
-            ("/mnt/docker-data/volumes/app-data", "docker_volume/app-data"),
-            ("/etc/systemd/system/my-service.service", "system/etc_systemd_system_my-service.service"),
+            (
+                "/mnt/docker-data/volumes/app-data",
+                "docker_volume/app-data",
+            ),
+            (
+                "/etc/systemd/system/my-service.service",
+                "system/etc_systemd_system_my-service.service",
+            ),
         ];
 
         for (native_path, expected_repo) in edge_cases {
             let result = PathMapper::path_to_repo_subpath(Path::new(native_path))?;
-            assert_eq!(result, expected_repo, "Failed for edge case: {}", native_path);
+            assert_eq!(
+                result, expected_repo,
+                "Failed for edge case: {}",
+                native_path
+            );
         }
         Ok(())
     }
@@ -308,18 +323,40 @@ mod tests {
     fn test_docker_volume_path_variations() -> Result<(), BackupServiceError> {
         // Test various docker volume path scenarios
         let docker_paths = vec![
-            ("/mnt/docker-data/volumes/postgres", "docker_volume/postgres"),
-            ("/mnt/docker-data/volumes/postgres/data", "docker_volume/postgres_data"),
+            (
+                "/mnt/docker-data/volumes/postgres",
+                "docker_volume/postgres",
+            ),
+            (
+                "/mnt/docker-data/volumes/postgres/data",
+                "docker_volume/postgres_data",
+            ),
             ("/mnt/docker-data/volumes/my-app", "docker_volume/my-app"),
-            ("/mnt/docker-data/volumes/app_data", "docker_volume/app_data"),
-            ("/mnt/docker-data/volumes/complex-name-123", "docker_volume/complex-name-123"),
-            ("/mnt/docker-data/volumes/app/config/nested", "docker_volume/app_config_nested"),
-            ("/mnt/docker-data/volumes/vol/subdir/deep/path", "docker_volume/vol_subdir_deep_path"),
+            (
+                "/mnt/docker-data/volumes/app_data",
+                "docker_volume/app_data",
+            ),
+            (
+                "/mnt/docker-data/volumes/complex-name-123",
+                "docker_volume/complex-name-123",
+            ),
+            (
+                "/mnt/docker-data/volumes/app/config/nested",
+                "docker_volume/app_config_nested",
+            ),
+            (
+                "/mnt/docker-data/volumes/vol/subdir/deep/path",
+                "docker_volume/vol_subdir_deep_path",
+            ),
         ];
 
         for (docker_path, expected_repo) in docker_paths {
             let result = PathMapper::path_to_repo_subpath(Path::new(docker_path))?;
-            assert_eq!(result, expected_repo, "Failed for docker path: {}", docker_path);
+            assert_eq!(
+                result, expected_repo,
+                "Failed for docker path: {}",
+                docker_path
+            );
         }
         Ok(())
     }
@@ -335,10 +372,22 @@ mod tests {
             ("/home/user_name", "user_home/user_name"),
             ("/home/tim/documents", "user_home/tim/documents"),
             ("/home/alice/projects", "user_home/alice/projects"),
-            ("/home/user123/My Documents", "user_home/user123/My Documents"),
-            ("/home/tim/projects/rust/my-project", "user_home/tim/projects_rust_my-project"),
-            ("/home/alice/Downloads/file.tar.gz", "user_home/alice/Downloads_file.tar.gz"),
-            ("/home/user/deep/nested/directory/structure", "user_home/user/deep_nested_directory_structure"),
+            (
+                "/home/user123/My Documents",
+                "user_home/user123/My Documents",
+            ),
+            (
+                "/home/tim/projects/rust/my-project",
+                "user_home/tim/projects_rust_my-project",
+            ),
+            (
+                "/home/alice/Downloads/file.tar.gz",
+                "user_home/alice/Downloads_file.tar.gz",
+            ),
+            (
+                "/home/user/deep/nested/directory/structure",
+                "user_home/user/deep_nested_directory_structure",
+            ),
         ];
 
         for (user_path, expected_repo) in user_paths {
@@ -357,9 +406,15 @@ mod tests {
             ("/usr", "system/usr"),
             ("/opt", "system/opt"),
             ("/etc/nginx", "system/etc_nginx"),
-            ("/etc/nginx/sites-available", "system/etc_nginx_sites-available"),
+            (
+                "/etc/nginx/sites-available",
+                "system/etc_nginx_sites-available",
+            ),
             ("/var/log", "system/var_log"),
-            ("/var/log/nginx/access.log", "system/var_log_nginx_access.log"),
+            (
+                "/var/log/nginx/access.log",
+                "system/var_log_nginx_access.log",
+            ),
             ("/usr/local/bin", "system/usr_local_bin"),
             ("/opt/software/config", "system/opt_software_config"),
             ("/srv/www/html", "system/srv_www_html"),
@@ -369,7 +424,11 @@ mod tests {
 
         for (system_path, expected_repo) in system_paths {
             let result = PathMapper::path_to_repo_subpath(Path::new(system_path))?;
-            assert_eq!(result, expected_repo, "Failed for system path: {}", system_path);
+            assert_eq!(
+                result, expected_repo,
+                "Failed for system path: {}",
+                system_path
+            );
         }
         Ok(())
     }
@@ -379,30 +438,34 @@ mod tests {
         // Test complex S3 to native conversion scenarios
         let complex_cases = vec![
             // Deep path structures
-            ("var_log_nginx_access_2025_01_15", "var/log/nginx/access/2025/01/15"),
-            ("home_user_projects_rust_my_project", "home/user/projects/rust/my/project"),
-            ("etc_systemd_system_docker_service", "etc/systemd/system/docker/service"),
-
+            (
+                "var_log_nginx_access_2025_01_15",
+                "var/log/nginx/access/2025/01/15",
+            ),
+            (
+                "home_user_projects_rust_my_project",
+                "home/user/projects/rust/my/project",
+            ),
+            (
+                "etc_systemd_system_docker_service",
+                "etc/systemd/system/docker/service",
+            ),
             // Mixed separators and special chars
             ("config_files_app_data", "config/files/app/data"),
             ("backup_2025_01_15_full", "backup/2025/01/15/full"),
-
             // Single underscore cases (should be preserved)
             ("my_app", "my_app"),
             ("database_backup", "database_backup"),
             ("config_file", "config_file"),
-
             // No underscores
             ("documents", "documents"),
             ("projects", "projects"),
             ("config", "config"),
-
             // Edge cases
             ("_", "_"),
             ("a_b", "a_b"),
             ("a_b_c", "a/b/c"),
             ("a_b_c_d_e", "a/b/c/d/e"),
-
             // Whitespace scenarios in S3 names (paths with spaces preserved as-is)
             ("Paradox Interactive", "Paradox Interactive"),
             ("My Games", "My Games"),
@@ -410,11 +473,19 @@ mod tests {
             ("Steam Games", "Steam Games"),
             ("Application Data", "Application Data"),
             ("Important Business Files", "Important Business Files"),
-
             // Mixed underscores and spaces (underscores converted, spaces preserved)
-            ("local_share_Paradox Interactive", "local/share/Paradox Interactive"),
-            ("steam_steamapps_common_Counter Strike", "steam/steamapps/common/Counter Strike"),
-            ("usr_share_applications_Visual Studio Code", "usr/share/applications/Visual Studio Code"),
+            (
+                "local_share_Paradox Interactive",
+                "local/share/Paradox Interactive",
+            ),
+            (
+                "steam_steamapps_common_Counter Strike",
+                "steam/steamapps/common/Counter Strike",
+            ),
+            (
+                "usr_share_applications_Visual Studio Code",
+                "usr/share/applications/Visual Studio Code",
+            ),
             ("var_log_system events", "var/log/system events"),
         ];
 
@@ -434,23 +505,19 @@ mod tests {
             ("Europa Universalis IV", "Europa Universalis IV"),
             ("Counter Strike", "Counter Strike"),
             ("Grand Theft Auto V", "Grand Theft Auto V"),
-
             // Software and application names
             ("Google Chrome", "Google Chrome"),
             ("Visual Studio Code", "Visual Studio Code"),
             ("Adobe After Effects 2024", "Adobe After Effects 2024"),
             ("JetBrains Toolbox", "JetBrains Toolbox"),
-
             // Document and media folders
             ("My Games", "My Games"),
             ("Important Documents", "Important Documents"),
             ("Home Movies", "Home Movies"),
             ("Classical Music", "Classical Music"),
-
             // Multiple spaces should be preserved
             ("My    Spaced    Directory", "My    Spaced    Directory"),
             ("App  With  Spaces", "App  With  Spaces"),
-
             // Leading and trailing spaces
             (" Leading Space", " Leading Space"),
             ("Trailing Space ", "Trailing Space "),
@@ -459,7 +526,11 @@ mod tests {
 
         for (s3_input, expected_output) in whitespace_preservation_cases {
             let result = PathMapper::s3_to_native_path(s3_input)?;
-            assert_eq!(result, expected_output, "Whitespace preservation failed for: {}", s3_input);
+            assert_eq!(
+                result, expected_output,
+                "Whitespace preservation failed for: {}",
+                s3_input
+            );
         }
         Ok(())
     }
@@ -472,12 +543,10 @@ mod tests {
             ("/home/tim/docs", "user_home"),
             ("/home/alice/projects", "user_home"),
             ("/home/user123/data", "user_home"),
-
             // Docker volume category
             ("/mnt/docker-data/volumes/postgres", "docker_volume"),
             ("/mnt/docker-data/volumes/app/config", "docker_volume"),
             ("/mnt/docker-data/volumes/complex-name", "docker_volume"),
-
             // System category
             ("/etc/nginx", "system"),
             ("/var/log/app", "system"),
@@ -490,9 +559,11 @@ mod tests {
         for (path, expected_category) in category_tests {
             let repo_subpath = PathMapper::path_to_repo_subpath(Path::new(path))?;
             let category = repo_subpath.split('/').next().unwrap_or("");
-            assert_eq!(category, expected_category,
+            assert_eq!(
+                category, expected_category,
                 "Category mismatch for path: {}, got: {}, expected: {}",
-                path, category, expected_category);
+                path, category, expected_category
+            );
         }
         Ok(())
     }
@@ -503,9 +574,11 @@ mod tests {
         let normalization_tests = vec![
             // Trailing slash handling
             ("/home/tim", "/home/tim/"),
-            ("/mnt/docker-data/volumes/app", "/mnt/docker-data/volumes/app/"),
+            (
+                "/mnt/docker-data/volumes/app",
+                "/mnt/docker-data/volumes/app/",
+            ),
             ("/etc/nginx", "/etc/nginx/"),
-
             // Leading slash consistency (all should have leading slash for absolute paths)
             // Note: These are all absolute paths, so behavior should be consistent
         ];
@@ -517,9 +590,11 @@ mod tests {
             // Results should be similar (trailing slash in input shouldn't change category)
             let category1 = result1.split('/').next().unwrap_or("");
             let category2 = result2.split('/').next().unwrap_or("");
-            assert_eq!(category1, category2,
+            assert_eq!(
+                category1, category2,
                 "Categories differ for similar paths: {} -> {}, {} -> {}",
-                path1, result1, path2, result2);
+                path1, result1, path2, result2
+            );
         }
         Ok(())
     }
@@ -594,8 +669,11 @@ mod tests {
 
         for (input_path, expected_repo) in special_char_tests {
             let result = PathMapper::path_to_repo_subpath(Path::new(input_path))?;
-            assert_eq!(result, expected_repo,
-                "Special character handling failed for: {}", input_path);
+            assert_eq!(
+                result, expected_repo,
+                "Special character handling failed for: {}",
+                input_path
+            );
         }
         Ok(())
     }
@@ -605,35 +683,73 @@ mod tests {
         // Dedicated test for comprehensive whitespace path scenarios
         let whitespace_scenarios = vec![
             // Gaming and entertainment paths
-            ("/home/user/.local/share/Paradox Interactive/Europa Universalis IV", "user_home/user/.local_share_Paradox Interactive_Europa Universalis IV"),
-            ("/home/gamer/.steam/steam/steamapps/common/Grand Theft Auto V", "user_home/gamer/.steam_steam_steamapps_common_Grand Theft Auto V"),
-            ("/home/user/Games/World of Warcraft/Data", "user_home/user/Games_World of Warcraft_Data"),
-
+            (
+                "/home/user/.local/share/Paradox Interactive/Europa Universalis IV",
+                "user_home/user/.local_share_Paradox Interactive_Europa Universalis IV",
+            ),
+            (
+                "/home/gamer/.steam/steam/steamapps/common/Grand Theft Auto V",
+                "user_home/gamer/.steam_steam_steamapps_common_Grand Theft Auto V",
+            ),
+            (
+                "/home/user/Games/World of Warcraft/Data",
+                "user_home/user/Games_World of Warcraft_Data",
+            ),
             // Professional software paths
-            ("/home/designer/Adobe After Effects 2024", "user_home/designer/Adobe After Effects 2024"),
-            ("/home/dev/.local/share/JetBrains Toolbox", "user_home/dev/.local_share_JetBrains Toolbox"),
+            (
+                "/home/designer/Adobe After Effects 2024",
+                "user_home/designer/Adobe After Effects 2024",
+            ),
+            (
+                "/home/dev/.local/share/JetBrains Toolbox",
+                "user_home/dev/.local_share_JetBrains Toolbox",
+            ),
             ("/home/user/VirtualBox VMs", "user_home/user/VirtualBox VMs"),
-
             // Document and media folders
-            ("/home/user/Documents/Important Business Files", "user_home/user/Documents_Important Business Files"),
-            ("/home/user/Music/Classical Music Collection", "user_home/user/Music_Classical Music Collection"),
-            ("/home/user/Videos/Home Movies 2024", "user_home/user/Videos_Home Movies 2024"),
-
+            (
+                "/home/user/Documents/Important Business Files",
+                "user_home/user/Documents_Important Business Files",
+            ),
+            (
+                "/home/user/Music/Classical Music Collection",
+                "user_home/user/Music_Classical Music Collection",
+            ),
+            (
+                "/home/user/Videos/Home Movies 2024",
+                "user_home/user/Videos_Home Movies 2024",
+            ),
             // Docker application containers with descriptive names
-            ("/mnt/docker-data/volumes/wordpress blog data", "docker_volume/wordpress blog data"),
-            ("/mnt/docker-data/volumes/nextcloud user files", "docker_volume/nextcloud user files"),
-            ("/mnt/docker-data/volumes/jenkins build artifacts", "docker_volume/jenkins build artifacts"),
-
+            (
+                "/mnt/docker-data/volumes/wordpress blog data",
+                "docker_volume/wordpress blog data",
+            ),
+            (
+                "/mnt/docker-data/volumes/nextcloud user files",
+                "docker_volume/nextcloud user files",
+            ),
+            (
+                "/mnt/docker-data/volumes/jenkins build artifacts",
+                "docker_volume/jenkins build artifacts",
+            ),
             // System applications and services
-            ("/usr/share/applications/Visual Studio Code", "system/usr_share_applications_Visual Studio Code"),
+            (
+                "/usr/share/applications/Visual Studio Code",
+                "system/usr_share_applications_Visual Studio Code",
+            ),
             ("/opt/Microsoft Teams", "system/opt_Microsoft Teams"),
-            ("/var/lib/docker/overlay2/My Container Layer", "system/var_lib_docker_overlay2_My Container Layer"),
+            (
+                "/var/lib/docker/overlay2/My Container Layer",
+                "system/var_lib_docker_overlay2_My Container Layer",
+            ),
         ];
 
         for (native_path, expected_repo) in whitespace_scenarios {
             let result = PathMapper::path_to_repo_subpath(Path::new(native_path))?;
-            assert_eq!(result, expected_repo,
-                "Comprehensive whitespace test failed for: {}", native_path);
+            assert_eq!(
+                result, expected_repo,
+                "Comprehensive whitespace test failed for: {}",
+                native_path
+            );
         }
         Ok(())
     }
@@ -659,7 +775,6 @@ mod tests {
                 repo_subpath: "user_home/alice/projects_rust".to_string(),
                 category: "user_home".to_string(),
             },
-
             // User home repositories with whitespace
             MockRepository {
                 native_path: PathBuf::from("/home/gamer/.local/share/Paradox Interactive"),
@@ -671,7 +786,6 @@ mod tests {
                 repo_subpath: "user_home/user/.config_Google Chrome".to_string(),
                 category: "user_home".to_string(),
             },
-
             // Docker volume repositories (original)
             MockRepository {
                 native_path: PathBuf::from("/mnt/docker-data/volumes/postgres"),
@@ -683,7 +797,6 @@ mod tests {
                 repo_subpath: "docker_volume/app_config".to_string(),
                 category: "docker_volume".to_string(),
             },
-
             // Docker volume repositories with whitespace
             MockRepository {
                 native_path: PathBuf::from("/mnt/docker-data/volumes/my app data"),
@@ -695,7 +808,6 @@ mod tests {
                 repo_subpath: "docker_volume/web server config".to_string(),
                 category: "docker_volume".to_string(),
             },
-
             // System repositories (original)
             MockRepository {
                 native_path: PathBuf::from("/etc/nginx"),
@@ -707,7 +819,6 @@ mod tests {
                 repo_subpath: "system/var_log_app".to_string(),
                 category: "system".to_string(),
             },
-
             // System repositories with whitespace
             MockRepository {
                 native_path: PathBuf::from("/usr/share/applications/My Application"),
@@ -724,22 +835,31 @@ mod tests {
         // Test that all mock repositories have consistent path mapping
         for mock_repo in &mock_repositories {
             let computed_repo_subpath = PathMapper::path_to_repo_subpath(&mock_repo.native_path)?;
-            assert_eq!(computed_repo_subpath, mock_repo.repo_subpath,
-                "Inconsistent path mapping for: {:?}", mock_repo.native_path);
+            assert_eq!(
+                computed_repo_subpath, mock_repo.repo_subpath,
+                "Inconsistent path mapping for: {:?}",
+                mock_repo.native_path
+            );
 
             let computed_category = computed_repo_subpath.split('/').next().unwrap_or("");
-            assert_eq!(computed_category, mock_repo.category,
-                "Inconsistent category for: {:?}", mock_repo.native_path);
+            assert_eq!(
+                computed_category, mock_repo.category,
+                "Inconsistent category for: {:?}",
+                mock_repo.native_path
+            );
         }
 
         // Test category grouping
-        let user_home_count = mock_repositories.iter()
+        let user_home_count = mock_repositories
+            .iter()
             .filter(|r| r.category == "user_home")
             .count();
-        let docker_volume_count = mock_repositories.iter()
+        let docker_volume_count = mock_repositories
+            .iter()
             .filter(|r| r.category == "docker_volume")
             .count();
-        let system_count = mock_repositories.iter()
+        let system_count = mock_repositories
+            .iter()
             .filter(|r| r.category == "system")
             .count();
 

@@ -2,6 +2,7 @@ use crate::errors::BackupServiceError;
 use crate::helpers::SnapshotInfo;
 use crate::repository::BackupRepo;
 use std::collections::HashMap;
+use tracing::info;
 
 /// Display formatter for backup summaries and listings
 pub struct DisplayFormatter;
@@ -14,14 +15,14 @@ impl DisplayFormatter {
     ) -> Result<(), BackupServiceError> {
         Self::display_backup_paths_summary(repos)?;
         Self::display_snapshot_timeline(snapshots)?;
-        println!();
+        info!("");
         Ok(())
     }
 
     /// Display backup paths summary section
     pub fn display_backup_paths_summary(repos: &[BackupRepo]) -> Result<(), BackupServiceError> {
-        println!("\nBACKUP PATHS SUMMARY:");
-        println!("====================");
+        info!("\nBACKUP PATHS SUMMARY:");
+        info!("====================");
 
         // Group by category
         let categories = Self::group_repos_by_category(repos)?;
@@ -36,11 +37,11 @@ impl DisplayFormatter {
 
     /// Display snapshot timeline section
     pub fn display_snapshot_timeline(snapshots: &[SnapshotInfo]) -> Result<(), BackupServiceError> {
-        println!("\nSNAPSHOT TIMELINE:");
-        println!("==================");
+        info!("\nSNAPSHOT TIMELINE:");
+        info!("==================");
 
         if snapshots.is_empty() {
-            println!("No snapshots found");
+            info!("No snapshots found");
             return Ok(());
         }
 
@@ -68,9 +69,9 @@ impl DisplayFormatter {
         let empty_vec = Vec::new();
         let user_repos = categories.get("user_home").unwrap_or(&empty_vec);
 
-        println!("\nUser Home ({} paths):", user_repos.len());
+        info!("\nUser Home ({} paths):", user_repos.len());
         if user_repos.is_empty() {
-            println!("  None");
+            info!("  None");
         } else {
             for repo in user_repos {
                 Self::display_repo_entry(repo)?;
@@ -87,9 +88,9 @@ impl DisplayFormatter {
         let empty_vec = Vec::new();
         let docker_repos = categories.get("docker_volume").unwrap_or(&empty_vec);
 
-        println!("\nDocker Volumes ({} paths):", docker_repos.len());
+        info!("\nDocker Volumes ({} paths):", docker_repos.len());
         if docker_repos.is_empty() {
-            println!("  None");
+            info!("  None");
         } else {
             for repo in docker_repos {
                 Self::display_repo_entry(repo)?;
@@ -106,9 +107,9 @@ impl DisplayFormatter {
         let empty_vec = Vec::new();
         let system_repos = categories.get("system").unwrap_or(&empty_vec);
 
-        println!("\nSystem ({} paths):", system_repos.len());
+        info!("\nSystem ({} paths):", system_repos.len());
         if system_repos.is_empty() {
-            println!("  None");
+            info!("  None");
         } else {
             for repo in system_repos {
                 Self::display_repo_entry(repo)?;
@@ -120,7 +121,7 @@ impl DisplayFormatter {
 
     /// Display a single repository entry
     fn display_repo_entry(repo: &BackupRepo) -> Result<(), BackupServiceError> {
-        println!(
+        info!(
             "  {:<50} - {} snapshots",
             repo.native_path.display(),
             repo.snapshot_count
@@ -151,7 +152,7 @@ impl DisplayFormatter {
 
         for time in times.iter().take(20) {
             if let Some(snaps) = timeline.get(time) {
-                println!("\n{}:", time);
+                info!("\n{}:", time);
                 for snap in snaps {
                     Self::display_snapshot_entry(snap)?;
                 }
@@ -159,7 +160,7 @@ impl DisplayFormatter {
         }
 
         if times.len() > 20 {
-            println!("\n... and {} more time points", times.len() - 20);
+            info!("\n... and {} more time points", times.len() - 20);
         }
 
         Ok(())
@@ -167,7 +168,7 @@ impl DisplayFormatter {
 
     /// Display a single snapshot entry
     fn display_snapshot_entry(snapshot: &SnapshotInfo) -> Result<(), BackupServiceError> {
-        println!("  - {:<50} (id: {})", snapshot.path.display(), snapshot.id);
+        info!("  - {:<50} (id: {})", snapshot.path.display(), snapshot.id);
         Ok(())
     }
 }
@@ -200,8 +201,8 @@ mod tests {
         let snapshots = vec![
             create_test_snapshot("2025-01-15T10:30:00Z", "/home/tim/docs", "abc123"),
             create_test_snapshot("2025-01-15T10:30:30Z", "/home/tim/projects", "def456"), // same minute
-            create_test_snapshot("2025-01-15T11:45:00Z", "/var/log", "ghi789"),          // different hour
-            create_test_snapshot("2025-01-16T10:30:00Z", "/etc/nginx", "jkl012"),        // different day
+            create_test_snapshot("2025-01-15T11:45:00Z", "/var/log", "ghi789"), // different hour
+            create_test_snapshot("2025-01-16T10:30:00Z", "/etc/nginx", "jkl012"), // different day
         ];
 
         let timeline = DisplayFormatter::group_snapshots_by_time(&snapshots)?;
@@ -231,7 +232,6 @@ mod tests {
             create_test_repo("/mnt/docker-data/volumes/redis", 2)?,
             create_test_repo("/etc/nginx", 1)?,
             create_test_repo("/var/log", 4)?,
-
             // Whitespace paths
             create_test_repo("/home/gamer/.local/share/Paradox Interactive", 7)?,
             create_test_repo("/home/user/.config/Google Chrome", 12)?,
@@ -355,9 +355,9 @@ mod tests {
         // All snapshots are converted to UTC in the struct, so timezone differences
         // should be handled correctly
         let snapshots = vec![
-            create_test_snapshot("2025-01-15T10:30:00Z", "/path1", "id1"),        // UTC
-            create_test_snapshot("2025-01-15T05:30:00-05:00", "/path2", "id2"),  // EST (same as UTC time)
-            create_test_snapshot("2025-01-15T15:30:00+05:00", "/path3", "id3"),  // Different timezone (same UTC)
+            create_test_snapshot("2025-01-15T10:30:00Z", "/path1", "id1"), // UTC
+            create_test_snapshot("2025-01-15T05:30:00-05:00", "/path2", "id2"), // EST (same as UTC time)
+            create_test_snapshot("2025-01-15T15:30:00+05:00", "/path3", "id3"), // Different timezone (same UTC)
         ];
 
         let timeline = DisplayFormatter::group_snapshots_by_time(&snapshots)?;
@@ -378,11 +378,9 @@ mod tests {
             create_test_repo("/home/tim", 1)?,
             create_test_repo("/home/alice/documents", 2)?,
             create_test_repo("/home/user123/projects/rust", 3)?,
-
             // Docker volume variations
             create_test_repo("/mnt/docker-data/volumes/postgres", 4)?,
             create_test_repo("/mnt/docker-data/volumes/app-data/config", 5)?,
-
             // System variations
             create_test_repo("/etc", 6)?,
             create_test_repo("/var/log/nginx", 7)?,
@@ -419,9 +417,21 @@ mod tests {
         ];
 
         let snapshots = vec![
-            create_test_snapshot("2025-01-15T10:30:00Z", "/home/gamer/.local/share/Paradox Interactive", "snap1"),
-            create_test_snapshot("2025-01-15T10:31:00Z", "/mnt/docker-data/volumes/my app data", "snap2"),
-            create_test_snapshot("2025-01-15T10:32:00Z", "/usr/share/applications/Visual Studio Code", "snap3"),
+            create_test_snapshot(
+                "2025-01-15T10:30:00Z",
+                "/home/gamer/.local/share/Paradox Interactive",
+                "snap1",
+            ),
+            create_test_snapshot(
+                "2025-01-15T10:31:00Z",
+                "/mnt/docker-data/volumes/my app data",
+                "snap2",
+            ),
+            create_test_snapshot(
+                "2025-01-15T10:32:00Z",
+                "/usr/share/applications/Visual Studio Code",
+                "snap3",
+            ),
         ];
 
         // Test grouping with whitespace paths

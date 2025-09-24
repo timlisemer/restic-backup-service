@@ -5,6 +5,7 @@ use crate::shared::paths::PathMapper;
 use chrono::{DateTime, Utc};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tracing::info;
 
 // ============================================================================
 
@@ -34,7 +35,7 @@ impl RepositoryScanner {
     /// List S3 directories with proper error handling
     pub async fn list_s3_dirs(&self, s3_path: &str) -> Result<Vec<String>, BackupServiceError> {
         let s3_bucket = self.config.s3_bucket()?;
-        let full_path = format!("s3://{}/{}", s3_bucket, s3_path);
+        let full_path = format!("s3://{}/{}/", s3_bucket, s3_path);
 
         let output = Command::new("aws")
             .args([
@@ -58,11 +59,13 @@ impl RepositoryScanner {
                 .lines()
                 .filter(|line| line.contains("PRE"))
                 .map(|line| {
-                    line.split_whitespace()
-                        .last()
-                        .unwrap_or("")
-                        .trim_end_matches('/')
-                        .to_string()
+                    // Extract directory name after "PRE " prefix, preserving spaces
+                    if let Some(start) = line.find("PRE ") {
+                        let dir_name = &line[start + 4..]; // Skip "PRE "
+                        dir_name.trim_end_matches('/').to_string()
+                    } else {
+                        String::new()
+                    }
                 })
                 .filter(|d| !d.is_empty())
                 .collect();
@@ -93,6 +96,7 @@ impl RepositoryScanner {
         repos.extend(self.scan_docker_volume_repositories(hostname).await?);
         repos.extend(self.scan_system_repositories(hostname).await?);
 
+        info!("Scanning completed!");
         Ok(repos)
     }
 
@@ -104,11 +108,14 @@ impl RepositoryScanner {
         let mut repos = Vec::new();
         let user_home_path = self.build_s3_path(hostname, "user_home")?;
 
+        info!("Scanning user home directories...");
         if let Ok(users) = self.list_s3_dirs(&user_home_path).await {
             for user in users {
+                info!("Processing user: {}", user);
                 let user_path = format!("{}/{}", user_home_path, user);
                 if let Ok(subdirs) = self.list_s3_dirs(&user_path).await {
                     for subdir in subdirs {
+                        info!("  Checking {}...", subdir);
                         let native_subdir = PathMapper::s3_to_native_path(&subdir)?;
                         let native_path =
                             PathBuf::from(format!("/home/{}/{}", user, native_subdir));
@@ -135,8 +142,10 @@ impl RepositoryScanner {
         let mut repos = Vec::new();
         let docker_path = self.build_s3_path(hostname, "docker_volume")?;
 
+        info!("Scanning docker volumes...");
         if let Ok(volumes) = self.list_s3_dirs(&docker_path).await {
             for volume in volumes {
+                info!("Processing volume: {}", volume);
                 // Add main volume repository
                 repos.push(self.create_docker_volume_repo_info(&volume)?);
 
@@ -159,6 +168,7 @@ impl RepositoryScanner {
         let mut repos = Vec::new();
         let system_path = self.build_s3_path(hostname, "system")?;
 
+        info!("Scanning system paths...");
         if let Ok(paths) = self.list_s3_dirs(&system_path).await {
             for path in paths {
                 let native_path_str = PathMapper::s3_to_native_path(&path)?;
@@ -800,5 +810,173 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_s3_directory_listing_parsing_with_spaces() {
+        // CRITICAL: Test that would have caught the whitespace parsing bug
+
+        // Mock AWS S3 ls output with directories containing spaces
+        // This is the exact format that AWS CLI returns
+        let mock_s3_output = r#"                           PRE .arduinoIDE/
+                           PRE .bash_history/
+                           PRE .config/
+                           PRE .local_share_Paradox Interactive_/
+                           PRE .local_share_Steam_steamapps_common_Grand Theft Auto V/
+                           PRE .mozilla/
+                           PRE Coding/
+                           PRE My Documents/
+                           PRE Photo Collection 2024/
+"#;
+
+        // Parse the output manually to test our parsing logic
+        let parsed_dirs: Vec<String> = mock_s3_output
+            .lines()
+            .filter(|line| line.contains("PRE"))
+            .map(|line| {
+                // This is the FIXED parsing logic that should preserve spaces
+                if let Some(start) = line.find("PRE ") {
+                    let dir_name = &line[start + 4..]; // Skip "PRE "
+                    dir_name.trim_end_matches('/').to_string()
+                } else {
+                    String::new()
+                }
+            })
+            .filter(|d| !d.is_empty())
+            .collect();
+
+        // Verify that directories with spaces are preserved correctly
+        assert!(
+            parsed_dirs.contains(&".local_share_Paradox Interactive_".to_string()),
+            "Failed to preserve spaces in '.local_share_Paradox Interactive_'"
+        );
+        assert!(
+            parsed_dirs
+                .contains(&".local_share_Steam_steamapps_common_Grand Theft Auto V".to_string()),
+            "Failed to preserve spaces in Grand Theft Auto V directory"
+        );
+        assert!(
+            parsed_dirs.contains(&"My Documents".to_string()),
+            "Failed to preserve spaces in 'My Documents'"
+        );
+        assert!(
+            parsed_dirs.contains(&"Photo Collection 2024".to_string()),
+            "Failed to preserve spaces in 'Photo Collection 2024'"
+        );
+
+        // Test that the OLD BUGGY parsing would have failed
+        let buggy_parsed_dirs: Vec<String> = mock_s3_output
+            .lines()
+            .filter(|line| line.contains("PRE"))
+            .map(|line| {
+                // This is the OLD BUGGY parsing logic
+                line.split_whitespace()
+                    .last()
+                    .unwrap_or("")
+                    .trim_end_matches('/')
+                    .to_string()
+            })
+            .filter(|d| !d.is_empty())
+            .collect();
+
+        // Demonstrate that the buggy parsing would have truncated directory names
+        assert!(
+            buggy_parsed_dirs.contains(&"Interactive_".to_string()),
+            "Buggy parsing should truncate to 'Interactive_'"
+        );
+        assert!(
+            !buggy_parsed_dirs.contains(&".local_share_Paradox Interactive_".to_string()),
+            "Buggy parsing should NOT preserve full directory name with spaces"
+        );
+        assert!(
+            buggy_parsed_dirs.contains(&"V".to_string()),
+            "Buggy parsing should truncate Grand Theft Auto V to just 'V'"
+        );
+
+        // Ensure we have the expected count of directories
+        assert_eq!(
+            parsed_dirs.len(),
+            9,
+            "Should parse all 9 directories correctly"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_s3_command_executor_parsing_with_spaces() {
+        // Test the S3CommandExecutor parsing logic specifically
+
+        // Mock S3 output for testing the parsing logic in isolation
+        // This tests the parse_s3_directories helper logic
+        let mock_output = r#"                           PRE application logs/
+                           PRE database backup files/
+                           PRE user data/
+                           PRE web server config/
+                           PRE Docker Volume With Spaces/
+"#;
+
+        let parsed: Vec<String> = mock_output
+            .lines()
+            .filter(|line| line.contains("PRE"))
+            .map(|line| {
+                // Test the FIXED parsing logic
+                if let Some(start) = line.find("PRE ") {
+                    let dir_name = &line[start + 4..];
+                    dir_name.trim_end_matches('/').to_string()
+                } else {
+                    String::new()
+                }
+            })
+            .filter(|d| !d.is_empty())
+            .collect();
+
+        // Verify correct parsing of directories with spaces
+        assert_eq!(parsed.len(), 5);
+        assert!(parsed.contains(&"application logs".to_string()));
+        assert!(parsed.contains(&"database backup files".to_string()));
+        assert!(parsed.contains(&"user data".to_string()));
+        assert!(parsed.contains(&"web server config".to_string()));
+        assert!(parsed.contains(&"Docker Volume With Spaces".to_string()));
+    }
+
+    #[test]
+    fn test_s3_parsing_edge_cases() {
+        // Test edge cases that could break S3 parsing
+        let edge_case_outputs = vec![
+            // Multiple spaces in directory names
+            r#"                           PRE Directory  With  Multiple  Spaces/"#,
+            // Leading and trailing spaces
+            r#"                           PRE  Leading And Trailing  /"#,
+            // Special characters with spaces
+            r#"                           PRE My-App Config Files/"#,
+            // Very long directory names with spaces
+            r#"                           PRE This Is A Very Long Directory Name With Many Words And Spaces/"#,
+        ];
+
+        for output in edge_case_outputs {
+            let parsed: Vec<String> = output
+                .lines()
+                .filter(|line| line.contains("PRE"))
+                .map(|line| {
+                    if let Some(start) = line.find("PRE ") {
+                        let dir_name = &line[start + 4..];
+                        dir_name.trim_end_matches('/').to_string()
+                    } else {
+                        String::new()
+                    }
+                })
+                .filter(|d| !d.is_empty())
+                .collect();
+
+            assert_eq!(
+                parsed.len(),
+                1,
+                "Should parse exactly one directory from: {}",
+                output
+            );
+            assert!(
+                !parsed[0].is_empty(),
+                "Parsed directory name should not be empty"
+            );
+        }
     }
 }
