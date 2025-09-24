@@ -262,6 +262,63 @@ mod tests {
             "s3:https://s3.amazonaws.com/my-bucket/restic/test-host/"
         );
 
+        // Test whitespace path scenarios
+        assert_eq!(
+            config.get_repo_url("user_home/gamer/.local/share/Paradox Interactive")?,
+            "s3:https://s3.amazonaws.com/my-bucket/restic/test-host/user_home/gamer/.local/share/Paradox Interactive"
+        );
+
+        assert_eq!(
+            config.get_repo_url("user_home/user/Documents/My Games")?,
+            "s3:https://s3.amazonaws.com/my-bucket/restic/test-host/user_home/user/Documents/My Games"
+        );
+
+        assert_eq!(
+            config.get_repo_url("docker_volume/my app data")?,
+            "s3:https://s3.amazonaws.com/my-bucket/restic/test-host/docker_volume/my app data"
+        );
+
+        assert_eq!(
+            config.get_repo_url("system/usr_share_applications_My Application")?,
+            "s3:https://s3.amazonaws.com/my-bucket/restic/test-host/system/usr_share_applications_My Application"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_repo_url_whitespace_edge_cases() -> Result<(), BackupServiceError> {
+        let config = create_test_config("s3:https://s3.amazonaws.com/my-bucket/restic");
+
+        // Test paths with multiple spaces
+        assert_eq!(
+            config.get_repo_url("user_home/user/My   Project   Files")?,
+            "s3:https://s3.amazonaws.com/my-bucket/restic/test-host/user_home/user/My   Project   Files"
+        );
+
+        // Test paths with leading/trailing spaces
+        assert_eq!(
+            config.get_repo_url("user_home/user/ leading space")?,
+            "s3:https://s3.amazonaws.com/my-bucket/restic/test-host/user_home/user/ leading space"
+        );
+
+        assert_eq!(
+            config.get_repo_url("docker_volume/trailing space ")?,
+            "s3:https://s3.amazonaws.com/my-bucket/restic/test-host/docker_volume/trailing space "
+        );
+
+        // Test paths with special characters and spaces
+        assert_eq!(
+            config.get_repo_url("user_home/developer/Cool App-Name v2.0")?,
+            "s3:https://s3.amazonaws.com/my-bucket/restic/test-host/user_home/developer/Cool App-Name v2.0"
+        );
+
+        // Test realistic gaming paths
+        assert_eq!(
+            config.get_repo_url("user_home/gamer/.steam/steam/steamapps/common/Counter Strike")?,
+            "s3:https://s3.amazonaws.com/my-bucket/restic/test-host/user_home/gamer/.steam/steam/steamapps/common/Counter Strike"
+        );
+
         Ok(())
     }
 

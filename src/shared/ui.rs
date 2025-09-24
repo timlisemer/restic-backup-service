@@ -307,38 +307,40 @@ mod tests {
         let result = select_repositories(backup_data, path_opt).await?;
 
         assert_eq!(result.selected_repos.len(), 1);
-        assert_eq!(result.selected_repos[0].path, PathBuf::from("/home/tim/docs"));
+        assert_eq!(
+            result.selected_repos[0].path,
+            PathBuf::from("/home/tim/docs")
+        );
         Ok(())
     }
 
     #[tokio::test]
     async fn test_select_repositories_path_filtering_no_match() {
-        let backup_data = vec![
-            create_test_repository_item(
-                "/home/tim/docs",
-                "user_home/tim/docs",
-                "user_home",
-                vec![create_test_snapshot_item("2025-01-15T10:30:00Z", "snap1")],
-            ),
-        ];
+        let backup_data = vec![create_test_repository_item(
+            "/home/tim/docs",
+            "user_home/tim/docs",
+            "user_home",
+            vec![create_test_snapshot_item("2025-01-15T10:30:00Z", "snap1")],
+        )];
 
         let path_opt = Some("/nonexistent/path".to_string());
         let result = select_repositories(backup_data, path_opt).await;
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No repositories selected"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No repositories selected"));
     }
 
     #[tokio::test]
     async fn test_select_timestamp_with_timestamp_opt() -> Result<(), BackupServiceError> {
-        let repos = vec![
-            create_test_repository_item(
-                "/home/tim/docs",
-                "user_home/tim/docs",
-                "user_home",
-                vec![create_test_snapshot_item("2025-01-15T10:30:00Z", "snap1")],
-            ),
-        ];
+        let repos = vec![create_test_repository_item(
+            "/home/tim/docs",
+            "user_home/tim/docs",
+            "user_home",
+            vec![create_test_snapshot_item("2025-01-15T10:30:00Z", "snap1")],
+        )];
 
         let timestamp_opt = Some("2025-01-15T12:00:00Z".to_string());
         let result = select_timestamp(&repos, timestamp_opt).await?;
@@ -352,18 +354,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_select_timestamp_empty_snapshots_error() {
-        let repos = vec![
-            create_test_repository_item(
-                "/home/tim/docs",
-                "user_home/tim/docs",
-                "user_home",
-                vec![], // No snapshots
-            ),
-        ];
+        let repos = vec![create_test_repository_item(
+            "/home/tim/docs",
+            "user_home/tim/docs",
+            "user_home",
+            vec![], // No snapshots
+        )];
 
         let result = select_timestamp(&repos, None).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No snapshots found"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No snapshots found"));
     }
 
     #[test]
@@ -376,14 +379,12 @@ mod tests {
             create_test_snapshot_item("2025-01-15T10:37:45Z", "snap4"), // Same window as snap3
         ];
 
-        let repos = vec![
-            create_test_repository_item(
-                "/home/tim/docs",
-                "user_home/tim/docs",
-                "user_home",
-                snapshots,
-            ),
-        ];
+        let repos = [create_test_repository_item(
+            "/home/tim/docs",
+            "user_home/tim/docs",
+            "user_home",
+            snapshots,
+        )];
 
         // Extract the time window calculation logic
         let mut all_timestamps: Vec<DateTime<Utc>> = repos
@@ -422,12 +423,12 @@ mod tests {
     #[test]
     fn test_time_window_counting() -> Result<(), BackupServiceError> {
         // Test time window snapshot counting logic
-        let snapshots = vec![
+        let snapshots = [
             create_test_snapshot_item("2025-01-15T10:30:00Z", "snap1"),
             create_test_snapshot_item("2025-01-15T10:31:00Z", "snap2"),
             create_test_snapshot_item("2025-01-15T10:32:30Z", "snap3"), // Same window
             create_test_snapshot_item("2025-01-15T10:35:00Z", "snap4"), // Next window
-            create_test_snapshot_item("2025-01-15T10:36:00Z", "snap5"), // Same window as snap4
+            create_test_snapshot_item("2025-01-15T10:36:00Z", "snap5"),
         ];
 
         let all_timestamps: Vec<DateTime<Utc>> = snapshots.iter().map(|s| s.time).collect();
@@ -464,10 +465,10 @@ mod tests {
     #[test]
     fn test_time_window_deduplication() -> Result<(), BackupServiceError> {
         // Test that identical timestamps don't create duplicate windows
-        let snapshots = vec![
+        let snapshots = [
             create_test_snapshot_item("2025-01-15T10:30:00Z", "snap1"),
             create_test_snapshot_item("2025-01-15T10:30:00Z", "snap2"), // Exact duplicate time
-            create_test_snapshot_item("2025-01-15T10:30:30Z", "snap3"), // Same window
+            create_test_snapshot_item("2025-01-15T10:30:30Z", "snap3"),
         ];
 
         let mut all_timestamps: Vec<DateTime<Utc>> = snapshots.iter().map(|s| s.time).collect();
@@ -497,11 +498,11 @@ mod tests {
     #[test]
     fn test_time_window_edge_cases() -> Result<(), BackupServiceError> {
         // Test edge cases around 5-minute boundaries
-        let snapshots = vec![
+        let snapshots = [
             create_test_snapshot_item("2025-01-15T10:29:59Z", "snap1"), // Just before window
             create_test_snapshot_item("2025-01-15T10:30:00Z", "snap2"), // Exact window start
             create_test_snapshot_item("2025-01-15T10:34:59Z", "snap3"), // Just before window end
-            create_test_snapshot_item("2025-01-15T10:35:00Z", "snap4"), // Next window start
+            create_test_snapshot_item("2025-01-15T10:35:00Z", "snap4"),
         ];
 
         let all_timestamps: Vec<DateTime<Utc>> = snapshots.iter().map(|s| s.time).collect();
@@ -605,7 +606,10 @@ mod tests {
             .cloned()
             .collect();
         assert_eq!(docker_repos.len(), 1);
-        assert_eq!(docker_repos[0].path, PathBuf::from("/mnt/docker-data/volumes/postgres"));
+        assert_eq!(
+            docker_repos[0].path,
+            PathBuf::from("/mnt/docker-data/volumes/postgres")
+        );
 
         // Test system filtering
         let system_repos: Vec<RepositorySelectionItem> = backup_data
@@ -622,7 +626,7 @@ mod tests {
     #[test]
     fn test_host_default_selection_logic() -> Result<(), BackupServiceError> {
         // Test the host default selection logic
-        let available_hosts = vec![
+        let available_hosts = [
             "host1".to_string(),
             "host2".to_string(),
             "current-host".to_string(),

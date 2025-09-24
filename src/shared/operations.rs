@@ -149,25 +149,25 @@ mod tests {
         // Create test repository data
         let repo_data = vec![
             create_test_repo_data(
-                "/home/tim/documents",
-                "user_home/tim/documents",
+                "/home/tim/.local/share/My Documents",
+                "user_home/tim/.local_share_My Documents",
                 "user_home",
                 vec![
-                    create_test_snapshot("2025-01-15T10:30:00Z", "/home/tim/documents", "snap1"),
-                    create_test_snapshot("2025-01-15T11:00:00Z", "/home/tim/documents", "snap2"),
+                    create_test_snapshot("2025-01-15T10:30:00Z", "/home/tim/.local/share/My Documents", "snap1"),
+                    create_test_snapshot("2025-01-15T11:00:00Z", "/home/tim/.local/share/My Documents", "snap2"),
                 ],
             ),
             create_test_repo_data(
-                "/mnt/docker-data/volumes/postgres",
-                "docker_volume/postgres",
+                "/mnt/docker-data/volumes/postgres backup",
+                "docker_volume/postgres backup",
                 "docker_volume",
                 vec![
-                    create_test_snapshot("2025-01-15T09:30:00Z", "/mnt/docker-data/volumes/postgres", "snap3"),
+                    create_test_snapshot("2025-01-15T09:30:00Z", "/mnt/docker-data/volumes/postgres backup", "snap3"),
                 ],
             ),
             create_test_repo_data(
-                "/etc/nginx",
-                "system/etc_nginx",
+                "/etc/systemd/system/my service.service",
+                "system/etc_systemd_system_my service.service",
                 "system",
                 vec![], // No snapshots
             ),
@@ -180,17 +180,17 @@ mod tests {
         assert_eq!(backup_repos.len(), 3);
 
         // Check first repo
-        assert_eq!(backup_repos[0].native_path, PathBuf::from("/home/tim/documents"));
+        assert_eq!(backup_repos[0].native_path, PathBuf::from("/home/tim/.local/share/My Documents"));
         assert_eq!(backup_repos[0].snapshot_count, 2);
         assert_eq!(backup_repos[0].category()?, "user_home");
 
         // Check second repo
-        assert_eq!(backup_repos[1].native_path, PathBuf::from("/mnt/docker-data/volumes/postgres"));
+        assert_eq!(backup_repos[1].native_path, PathBuf::from("/mnt/docker-data/volumes/postgres backup"));
         assert_eq!(backup_repos[1].snapshot_count, 1);
         assert_eq!(backup_repos[1].category()?, "docker_volume");
 
         // Check third repo (no snapshots)
-        assert_eq!(backup_repos[2].native_path, PathBuf::from("/etc/nginx"));
+        assert_eq!(backup_repos[2].native_path, PathBuf::from("/etc/systemd/system/my service.service"));
         assert_eq!(backup_repos[2].snapshot_count, 0);
         assert_eq!(backup_repos[2].category()?, "system");
 
@@ -240,26 +240,26 @@ mod tests {
 
         let repo_data = vec![
             create_test_repo_data(
-                "/home/tim/documents",
-                "user_home/tim/documents",
+                "/home/user/.config/Google Chrome",
+                "user_home/user/.config_Google Chrome",
                 "user_home",
                 vec![
-                    create_test_snapshot("2025-01-15T10:30:00Z", "/home/tim/documents", "snap1"),
-                    create_test_snapshot("2025-01-15T11:00:00Z", "/home/tim/documents", "snap2"),
+                    create_test_snapshot("2025-01-15T10:30:00Z", "/home/user/.config/Google Chrome", "snap1"),
+                    create_test_snapshot("2025-01-15T11:00:00Z", "/home/user/.config/Google Chrome", "snap2"),
                 ],
             ),
             create_test_repo_data(
-                "/mnt/docker-data/volumes/postgres",
-                "docker_volume/postgres",
+                "/mnt/docker-data/volumes/database backup",
+                "docker_volume/database backup",
                 "docker_volume",
                 vec![
-                    create_test_snapshot("2025-01-15T09:30:00Z", "/mnt/docker-data/volumes/postgres", "snap3"),
-                    create_test_snapshot("2025-01-15T12:00:00Z", "/mnt/docker-data/volumes/postgres", "snap4"),
+                    create_test_snapshot("2025-01-15T09:30:00Z", "/mnt/docker-data/volumes/database backup", "snap3"),
+                    create_test_snapshot("2025-01-15T12:00:00Z", "/mnt/docker-data/volumes/database backup", "snap4"),
                 ],
             ),
             create_test_repo_data(
-                "/etc/nginx",
-                "system/etc_nginx",
+                "/usr/share/applications/My App",
+                "system/usr_share_applications_My App",
                 "system",
                 vec![], // No snapshots
             ),
@@ -446,6 +446,100 @@ mod tests {
 
         assert_eq!(backup_repos[2].category()?, "system");
         assert_eq!(backup_repos[2].snapshot_count, 3);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_operations_with_whitespace_paths() -> Result<(), BackupServiceError> {
+        use crate::config::Config;
+
+        let config = Config {
+            restic_password: "test".to_string(),
+            restic_repo_base: "s3:https://test.com/bucket".to_string(),
+            aws_access_key_id: "test".to_string(),
+            aws_secret_access_key: "test".to_string(),
+            aws_default_region: "auto".to_string(),
+            aws_s3_endpoint: "https://test.com".to_string(),
+            backup_paths: vec![],
+            hostname: "test-host".to_string(),
+        };
+
+        let ops = RepositoryOperations::new(config)?;
+
+        // Test with whitespace paths in all categories
+        let repo_data = vec![
+            create_test_repo_data(
+                "/home/gamer/.local/share/Paradox Interactive",
+                "user_home/gamer/.local_share_Paradox Interactive",
+                "user_home",
+                vec![
+                    create_test_snapshot("2025-01-15T10:30:00Z", "/home/gamer/.local/share/Paradox Interactive", "game1"),
+                    create_test_snapshot("2025-01-15T11:00:00Z", "/home/gamer/.local/share/Paradox Interactive", "game2"),
+                ],
+            ),
+            create_test_repo_data(
+                "/home/user/.config/Google Chrome",
+                "user_home/user/.config_Google Chrome",
+                "user_home",
+                vec![
+                    create_test_snapshot("2025-01-15T09:30:00Z", "/home/user/.config/Google Chrome", "browser1"),
+                ],
+            ),
+            create_test_repo_data(
+                "/mnt/docker-data/volumes/my app data",
+                "docker_volume/my app data",
+                "docker_volume",
+                vec![
+                    create_test_snapshot("2025-01-15T08:00:00Z", "/mnt/docker-data/volumes/my app data", "docker1"),
+                    create_test_snapshot("2025-01-15T08:30:00Z", "/mnt/docker-data/volumes/my app data", "docker2"),
+                    create_test_snapshot("2025-01-15T09:00:00Z", "/mnt/docker-data/volumes/my app data", "docker3"),
+                ],
+            ),
+            create_test_repo_data(
+                "/usr/share/applications/Visual Studio Code",
+                "system/usr_share_applications_Visual Studio Code",
+                "system",
+                vec![
+                    create_test_snapshot("2025-01-15T07:30:00Z", "/usr/share/applications/Visual Studio Code", "app1"),
+                ],
+            ),
+        ];
+
+        // Test conversion to BackupRepo format
+        let backup_repos = ops.convert_to_backup_repos(repo_data.clone())?;
+        assert_eq!(backup_repos.len(), 4);
+
+        // Verify whitespace paths are handled correctly
+        assert_eq!(backup_repos[0].native_path.display().to_string(), "/home/gamer/.local/share/Paradox Interactive");
+        assert_eq!(backup_repos[0].snapshot_count, 2);
+        assert_eq!(backup_repos[0].category()?, "user_home");
+
+        assert_eq!(backup_repos[1].native_path.display().to_string(), "/home/user/.config/Google Chrome");
+        assert_eq!(backup_repos[1].snapshot_count, 1);
+        assert_eq!(backup_repos[1].category()?, "user_home");
+
+        assert_eq!(backup_repos[2].native_path.display().to_string(), "/mnt/docker-data/volumes/my app data");
+        assert_eq!(backup_repos[2].snapshot_count, 3);
+        assert_eq!(backup_repos[2].category()?, "docker_volume");
+
+        assert_eq!(backup_repos[3].native_path.display().to_string(), "/usr/share/applications/Visual Studio Code");
+        assert_eq!(backup_repos[3].snapshot_count, 1);
+        assert_eq!(backup_repos[3].category()?, "system");
+
+        // Test snapshot extraction with whitespace paths
+        let all_snapshots = ops.extract_all_snapshots(&repo_data);
+        assert_eq!(all_snapshots.len(), 7); // 2 + 1 + 3 + 1
+
+        // Verify snapshot paths contain spaces correctly
+        let snapshot_paths: Vec<String> = all_snapshots.iter()
+            .map(|s| s.path.display().to_string())
+            .collect();
+
+        assert!(snapshot_paths.contains(&"/home/gamer/.local/share/Paradox Interactive".to_string()));
+        assert!(snapshot_paths.contains(&"/home/user/.config/Google Chrome".to_string()));
+        assert!(snapshot_paths.contains(&"/mnt/docker-data/volumes/my app data".to_string()));
+        assert!(snapshot_paths.contains(&"/usr/share/applications/Visual Studio Code".to_string()));
 
         Ok(())
     }

@@ -224,12 +224,21 @@ mod tests {
     #[test]
     fn test_group_repos_by_category() -> Result<(), BackupServiceError> {
         let repos = vec![
+            // Original paths
             create_test_repo("/home/tim/documents", 5)?,
             create_test_repo("/home/alice/projects", 3)?,
             create_test_repo("/mnt/docker-data/volumes/postgres", 8)?,
             create_test_repo("/mnt/docker-data/volumes/redis", 2)?,
             create_test_repo("/etc/nginx", 1)?,
             create_test_repo("/var/log", 4)?,
+
+            // Whitespace paths
+            create_test_repo("/home/gamer/.local/share/Paradox Interactive", 7)?,
+            create_test_repo("/home/user/.config/Google Chrome", 12)?,
+            create_test_repo("/mnt/docker-data/volumes/my app data", 6)?,
+            create_test_repo("/mnt/docker-data/volumes/web server config", 3)?,
+            create_test_repo("/usr/share/applications/My Application", 2)?,
+            create_test_repo("/opt/Google Chrome", 1)?,
         ];
 
         let categories = DisplayFormatter::group_repos_by_category(&repos)?;
@@ -239,10 +248,10 @@ mod tests {
         assert!(categories.contains_key("docker_volume"));
         assert!(categories.contains_key("system"));
 
-        // Check counts
-        assert_eq!(categories.get("user_home").unwrap().len(), 2);
-        assert_eq!(categories.get("docker_volume").unwrap().len(), 2);
-        assert_eq!(categories.get("system").unwrap().len(), 2);
+        // Check counts (should include whitespace paths)
+        assert_eq!(categories.get("user_home").unwrap().len(), 4); // 2 original + 2 whitespace
+        assert_eq!(categories.get("docker_volume").unwrap().len(), 4); // 2 original + 2 whitespace
+        assert_eq!(categories.get("system").unwrap().len(), 4); // 2 original + 2 whitespace
 
         Ok(())
     }
@@ -393,6 +402,42 @@ mod tests {
         assert_eq!(categories.get("user_home").unwrap().len(), 3);
         assert_eq!(categories.get("docker_volume").unwrap().len(), 2);
         assert_eq!(categories.get("system").unwrap().len(), 5);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_display_whitespace_path_formatting() -> Result<(), BackupServiceError> {
+        // Test display functionality with paths containing spaces
+        let repos = vec![
+            create_test_repo("/home/gamer/.local/share/Paradox Interactive", 15)?,
+            create_test_repo("/home/user/.steam/steam/steamapps/common/Counter Strike", 8)?,
+            create_test_repo("/mnt/docker-data/volumes/my app data", 12)?,
+            create_test_repo("/mnt/docker-data/volumes/web server config", 4)?,
+            create_test_repo("/usr/share/applications/Visual Studio Code", 3)?,
+            create_test_repo("/opt/Google Chrome", 6)?,
+        ];
+
+        let snapshots = vec![
+            create_test_snapshot("2025-01-15T10:30:00Z", "/home/gamer/.local/share/Paradox Interactive", "snap1"),
+            create_test_snapshot("2025-01-15T10:31:00Z", "/mnt/docker-data/volumes/my app data", "snap2"),
+            create_test_snapshot("2025-01-15T10:32:00Z", "/usr/share/applications/Visual Studio Code", "snap3"),
+        ];
+
+        // Test grouping with whitespace paths
+        let categories = DisplayFormatter::group_repos_by_category(&repos)?;
+        assert_eq!(categories.get("user_home").unwrap().len(), 2);
+        assert_eq!(categories.get("docker_volume").unwrap().len(), 2);
+        assert_eq!(categories.get("system").unwrap().len(), 2);
+
+        // Test timeline grouping with whitespace paths
+        let timeline = DisplayFormatter::group_snapshots_by_time(&snapshots)?;
+        assert_eq!(timeline.len(), 3); // Different minutes
+
+        // Test that display functions don't error with whitespace paths
+        DisplayFormatter::display_backup_paths_summary(&repos)?;
+        DisplayFormatter::display_snapshot_timeline(&snapshots)?;
+        DisplayFormatter::display_backup_summary(&repos, &snapshots)?;
 
         Ok(())
     }

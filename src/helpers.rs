@@ -368,8 +368,8 @@ mod tests {
 
     #[test]
     fn test_repository_info_creation() {
-        let native_path = PathBuf::from("/home/tim/documents");
-        let repo_subpath = "user_home/tim/documents".to_string();
+        let native_path = PathBuf::from("/home/user/.local/share/My Documents");
+        let repo_subpath = "user_home/user/.local_share_My Documents".to_string();
         let category = "user_home".to_string();
 
         let repo_info = RepositoryInfo {
@@ -413,7 +413,7 @@ mod tests {
         let time = DateTime::parse_from_rfc3339(time_str)
             .unwrap()
             .with_timezone(&Utc);
-        let path = PathBuf::from("/home/tim/documents");
+        let path = PathBuf::from("/home/gamer/.local/share/Paradox Interactive");
         let id = "abc123def456".to_string();
 
         let snapshot_info = SnapshotInfo {
@@ -520,6 +520,7 @@ mod tests {
     fn test_complex_path_handling() {
         // Test complex paths with spaces, unicode, and special characters
         let test_cases = vec![
+            // Original cases
             "/home/user with spaces/documents",
             "/home/alice/projects/my-project",
             "/mnt/docker-data/volumes/app_data",
@@ -528,6 +529,41 @@ mod tests {
             "/usr/local/bin/custom-script",
             "/opt/software/version-1.2.3",
             "/home/user123/Downloads/file.tar.gz",
+
+            // Comprehensive whitespace scenarios
+            // Gaming directories
+            "/home/gamer/.local/share/Paradox Interactive",
+            "/home/user/.steam/steam/steamapps/common/Grand Theft Auto V",
+            "/home/player/Games/World of Warcraft/Interface/AddOns",
+
+            // Application directories
+            "/home/user/.config/Google Chrome",
+            "/home/developer/.local/share/JetBrains Toolbox",
+            "/home/designer/Adobe After Effects 2024",
+
+            // Document and media folders
+            "/home/user/Documents/Important Business Files",
+            "/home/user/Music/Classical Music Collection",
+            "/home/user/Videos/Home Movies 2024",
+
+            // Docker volumes with spaces
+            "/mnt/docker-data/volumes/my app data",
+            "/mnt/docker-data/volumes/web server config",
+            "/mnt/docker-data/volumes/database backup files",
+
+            // System paths with spaces
+            "/usr/share/applications/Visual Studio Code",
+            "/opt/Google Chrome",
+            "/var/log/system events",
+
+            // Edge cases with multiple spaces
+            "/home/user/My    Project    Files",
+            "/home/user/App  With  Multiple  Spaces",
+
+            // Leading and trailing spaces
+            "/home/user/ leading space",
+            "/home/user/trailing space ",
+            "/home/user/ both spaces ",
         ];
 
         for path_str in test_cases {
@@ -539,6 +575,12 @@ mod tests {
 
             assert_eq!(repo_info.native_path, PathBuf::from(path_str));
             assert!(repo_info.repo_subpath.starts_with("test/"));
+
+            // Verify that whitespace is preserved in the path
+            if path_str.contains(' ') {
+                assert!(repo_info.native_path.to_string_lossy().contains(' '),
+                    "Whitespace should be preserved in path: {}", path_str);
+            }
         }
     }
 
@@ -575,12 +617,23 @@ mod tests {
     fn test_docker_volume_helper_logic() {
         // Test the logic used in create_docker_volume_repo_info helper
         let volume_names = vec![
+            // Original cases
             "postgres",
             "redis",
             "app-data",
             "my_volume",
             "volume123",
             "complex-name-with-dashes",
+
+            // Whitespace docker volume names
+            "my app data",
+            "web server config",
+            "database backup files",
+            "game server data",
+            "Application Config Files",
+            "My Personal Volume",
+            "Development Environment",
+            "Production Database",
         ];
 
         for volume in &volume_names {
@@ -597,36 +650,59 @@ mod tests {
             assert_eq!(repo_info.repo_subpath, repo_subpath);
             assert_eq!(repo_info.category, "docker_volume");
             assert!(repo_info.native_path.to_string_lossy().contains(volume));
+
+            // Verify whitespace is preserved in volume names with spaces
+            if volume.contains(' ') {
+                assert!(repo_info.native_path.to_string_lossy().contains(' '),
+                    "Whitespace should be preserved in docker volume: {}", volume);
+            }
         }
     }
 
     #[test]
     fn test_nested_repository_logic() {
         // Test the logic used in scan_nested_docker_repositories
-        let volume = "myapp";
-        let nested_repos = vec!["config", "data", "logs", "backups"];
+        let test_scenarios = vec![
+            // Original scenario
+            ("myapp", vec!["config", "data", "logs", "backups"]),
 
-        for nested_repo in &nested_repos {
-            let nested_path = PathBuf::from(format!(
-                "/mnt/docker-data/volumes/{}/{}",
-                volume, nested_repo
-            ));
-            let nested_repo_subpath = format!("docker_volume/{}/{}", volume, nested_repo);
+            // Whitespace volume with nested repos
+            ("my app data", vec!["config files", "user data", "backup storage", "temp files"]),
+            ("web server", vec!["apache config", "ssl certificates", "site data"]),
+            ("game server", vec!["world saves", "player data", "mod configs"]),
+        ];
 
-            let repo_info = RepositoryInfo {
-                native_path: nested_path.clone(),
-                repo_subpath: nested_repo_subpath.clone(),
-                category: "docker_volume".to_string(),
-            };
+        for (volume, nested_repos) in test_scenarios {
+            for nested_repo in &nested_repos {
+                let nested_path = PathBuf::from(format!(
+                    "/mnt/docker-data/volumes/{}/{}",
+                    volume, nested_repo
+                ));
+                let nested_repo_subpath = format!("docker_volume/{}/{}", volume, nested_repo);
 
-            assert_eq!(repo_info.native_path, nested_path);
-            assert_eq!(repo_info.repo_subpath, nested_repo_subpath);
-            assert_eq!(repo_info.category, "docker_volume");
+                let repo_info = RepositoryInfo {
+                    native_path: nested_path.clone(),
+                    repo_subpath: nested_repo_subpath.clone(),
+                    category: "docker_volume".to_string(),
+                };
 
-            // Verify path structure
-            assert!(repo_info.native_path.to_string_lossy().contains(volume));
-            assert!(repo_info.native_path.to_string_lossy().contains(nested_repo));
-            assert!(repo_info.repo_subpath.contains(&format!("{}/{}", volume, nested_repo)));
+                assert_eq!(repo_info.native_path, nested_path);
+                assert_eq!(repo_info.repo_subpath, nested_repo_subpath);
+                assert_eq!(repo_info.category, "docker_volume");
+
+                // Verify path structure
+                assert!(repo_info.native_path.to_string_lossy().contains(volume));
+                assert!(repo_info.native_path.to_string_lossy().contains(nested_repo));
+                assert!(repo_info.repo_subpath.contains(&format!("{}/{}", volume, nested_repo)));
+
+                // Verify whitespace preservation
+                if volume.contains(' ') || nested_repo.contains(' ') {
+                    let path_str = repo_info.native_path.to_string_lossy();
+                    assert!(path_str.contains(' '),
+                        "Whitespace should be preserved in nested path: volume='{}', nested='{}'",
+                        volume, nested_repo);
+                }
+            }
         }
     }
 }

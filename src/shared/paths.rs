@@ -120,20 +120,20 @@ mod tests {
             "user_home/tim"
         );
         assert_eq!(
-            PathMapper::path_to_repo_subpath(Path::new("/home/tim/documents"))?,
-            "user_home/tim/documents"
+            PathMapper::path_to_repo_subpath(Path::new("/home/user/.local/share/My Documents"))?,
+            "user_home/user/.local_share_My Documents"
         );
         assert_eq!(
             PathMapper::path_to_repo_subpath(Path::new("/home/tim/my/deep/path"))?,
             "user_home/tim/my_deep_path"
         );
         assert_eq!(
-            PathMapper::path_to_repo_subpath(Path::new("/mnt/docker-data/volumes/myapp"))?,
-            "docker_volume/myapp"
+            PathMapper::path_to_repo_subpath(Path::new("/mnt/docker-data/volumes/my app data"))?,
+            "docker_volume/my app data"
         );
         assert_eq!(
-            PathMapper::path_to_repo_subpath(Path::new("/etc/nginx"))?,
-            "system/etc_nginx"
+            PathMapper::path_to_repo_subpath(Path::new("/usr/share/applications/Google Chrome"))?,
+            "system/usr_share_applications_Google Chrome"
         );
         Ok(())
     }
@@ -402,11 +402,64 @@ mod tests {
             ("a_b", "a_b"),
             ("a_b_c", "a/b/c"),
             ("a_b_c_d_e", "a/b/c/d/e"),
+
+            // Whitespace scenarios in S3 names (paths with spaces preserved as-is)
+            ("Paradox Interactive", "Paradox Interactive"),
+            ("My Games", "My Games"),
+            ("Google Chrome", "Google Chrome"),
+            ("Steam Games", "Steam Games"),
+            ("Application Data", "Application Data"),
+            ("Important Business Files", "Important Business Files"),
+
+            // Mixed underscores and spaces (underscores converted, spaces preserved)
+            ("local_share_Paradox Interactive", "local/share/Paradox Interactive"),
+            ("steam_steamapps_common_Counter Strike", "steam/steamapps/common/Counter Strike"),
+            ("usr_share_applications_Visual Studio Code", "usr/share/applications/Visual Studio Code"),
+            ("var_log_system events", "var/log/system events"),
         ];
 
         for (s3_input, expected_native) in complex_cases {
             let result = PathMapper::s3_to_native_path(s3_input)?;
             assert_eq!(result, expected_native, "Failed for S3 input: {}", s3_input);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_s3_to_native_whitespace_preservation() -> Result<(), BackupServiceError> {
+        // Test that spaces in S3 directory names are preserved correctly
+        let whitespace_preservation_cases = vec![
+            // Gaming directories that commonly have spaces
+            ("Paradox Interactive", "Paradox Interactive"),
+            ("Europa Universalis IV", "Europa Universalis IV"),
+            ("Counter Strike", "Counter Strike"),
+            ("Grand Theft Auto V", "Grand Theft Auto V"),
+
+            // Software and application names
+            ("Google Chrome", "Google Chrome"),
+            ("Visual Studio Code", "Visual Studio Code"),
+            ("Adobe After Effects 2024", "Adobe After Effects 2024"),
+            ("JetBrains Toolbox", "JetBrains Toolbox"),
+
+            // Document and media folders
+            ("My Games", "My Games"),
+            ("Important Documents", "Important Documents"),
+            ("Home Movies", "Home Movies"),
+            ("Classical Music", "Classical Music"),
+
+            // Multiple spaces should be preserved
+            ("My    Spaced    Directory", "My    Spaced    Directory"),
+            ("App  With  Spaces", "App  With  Spaces"),
+
+            // Leading and trailing spaces
+            (" Leading Space", " Leading Space"),
+            ("Trailing Space ", "Trailing Space "),
+            (" Both Spaces ", " Both Spaces "),
+        ];
+
+        for (s3_input, expected_output) in whitespace_preservation_cases {
+            let result = PathMapper::s3_to_native_path(s3_input)?;
+            assert_eq!(result, expected_output, "Whitespace preservation failed for: {}", s3_input);
         }
         Ok(())
     }
@@ -473,8 +526,9 @@ mod tests {
 
     #[test]
     fn test_special_character_handling() -> Result<(), BackupServiceError> {
-        // Test handling of special characters in paths
+        // Test handling of special characters and whitespace in paths
         let special_char_tests = vec![
+            // Original basic cases
             ("/home/user/file with spaces", "user_home/user/file with spaces"),
             ("/home/user/file-with-hyphens", "user_home/user/file-with-hyphens"),
             ("/home/user/file_with_underscores", "user_home/user/file_with_underscores"),
@@ -482,12 +536,88 @@ mod tests {
             ("/mnt/docker-data/volumes/app-name", "docker_volume/app-name"),
             ("/etc/my-service.conf", "system/etc_my-service.conf"),
             ("/var/log/app_2025.log", "system/var_log_app_2025.log"),
+
+            // Comprehensive whitespace scenarios
+            // Real-world gaming directories
+            ("/home/user/.local/share/Paradox Interactive", "user_home/user/.local_share_Paradox Interactive"),
+            ("/home/gamer/.steam/steam/steamapps/common/Counter Strike", "user_home/gamer/.steam_steam_steamapps_common_Counter Strike"),
+            ("/home/user/.local/share/Steam Games", "user_home/user/.local_share_Steam Games"),
+            ("/home/gamer/Documents/My Games", "user_home/gamer/Documents_My Games"),
+
+            // Application data directories
+            ("/home/user/.config/Google Chrome", "user_home/user/.config_Google Chrome"),
+            ("/home/user/.mozilla/firefox/Profile Name", "user_home/user/.mozilla_firefox_Profile Name"),
+            ("/home/developer/Projects/My Awesome App", "user_home/developer/Projects_My Awesome App"),
+
+            // Docker volumes with spaces
+            ("/mnt/docker-data/volumes/my app data", "docker_volume/my app data"),
+            ("/mnt/docker-data/volumes/database backup files", "docker_volume/database backup files"),
+            ("/mnt/docker-data/volumes/web server config", "docker_volume/web server config"),
+            ("/mnt/docker-data/volumes/Application Config Files", "docker_volume/Application Config Files"),
+
+            // System paths with spaces
+            ("/usr/share/applications/My Application", "system/usr_share_applications_My Application"),
+            ("/opt/Google Chrome", "system/opt_Google Chrome"),
+            ("/var/log/system events", "system/var_log_system events"),
+            ("/usr/local/share/Application Data", "system/usr_local_share_Application Data"),
+
+            // Edge cases with multiple spaces
+            ("/home/user/My    Project    Files", "user_home/user/My    Project    Files"),
+            ("/mnt/docker-data/volumes/app  with  spaces", "docker_volume/app  with  spaces"),
+
+            // Leading/trailing spaces in path components
+            ("/home/user/ leading space", "user_home/user/ leading space"),
+            ("/home/user/trailing space ", "user_home/user/trailing space "),
+            ("/mnt/docker-data/volumes/ docker volume ", "docker_volume/ docker volume "),
+
+            // Mixed special characters and spaces
+            ("/home/user/.local/share/App-Name With Spaces", "user_home/user/.local_share_App-Name With Spaces"),
+            ("/home/user/Downloads/Software v2.0 Final", "user_home/user/Downloads_Software v2.0 Final"),
+            ("/etc/systemd/system/my-service with spaces.service", "system/etc_systemd_system_my-service with spaces.service"),
         ];
 
         for (input_path, expected_repo) in special_char_tests {
             let result = PathMapper::path_to_repo_subpath(Path::new(input_path))?;
             assert_eq!(result, expected_repo,
                 "Special character handling failed for: {}", input_path);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_comprehensive_whitespace_paths() -> Result<(), BackupServiceError> {
+        // Dedicated test for comprehensive whitespace path scenarios
+        let whitespace_scenarios = vec![
+            // Gaming and entertainment paths
+            ("/home/user/.local/share/Paradox Interactive/Europa Universalis IV", "user_home/user/.local_share_Paradox Interactive_Europa Universalis IV"),
+            ("/home/gamer/.steam/steam/steamapps/common/Grand Theft Auto V", "user_home/gamer/.steam_steam_steamapps_common_Grand Theft Auto V"),
+            ("/home/user/Games/World of Warcraft/Data", "user_home/user/Games_World of Warcraft_Data"),
+
+            // Professional software paths
+            ("/home/designer/Adobe After Effects 2024", "user_home/designer/Adobe After Effects 2024"),
+            ("/home/dev/.local/share/JetBrains Toolbox", "user_home/dev/.local_share_JetBrains Toolbox"),
+            ("/home/user/VirtualBox VMs", "user_home/user/VirtualBox VMs"),
+
+            // Document and media folders
+            ("/home/user/Documents/Important Business Files", "user_home/user/Documents_Important Business Files"),
+            ("/home/user/Music/Classical Music Collection", "user_home/user/Music_Classical Music Collection"),
+            ("/home/user/Videos/Home Movies 2024", "user_home/user/Videos_Home Movies 2024"),
+
+            // Docker application containers with descriptive names
+            ("/mnt/docker-data/volumes/wordpress blog data", "docker_volume/wordpress blog data"),
+            ("/mnt/docker-data/volumes/nextcloud user files", "docker_volume/nextcloud user files"),
+            ("/mnt/docker-data/volumes/jenkins build artifacts", "docker_volume/jenkins build artifacts"),
+
+            // System applications and services
+            ("/usr/share/applications/Visual Studio Code", "system/usr_share_applications_Visual Studio Code"),
+            ("/opt/Microsoft Teams", "system/opt_Microsoft Teams"),
+            ("/var/lib/docker/overlay2/My Container Layer", "system/var_lib_docker_overlay2_My Container Layer"),
+        ];
+
+        for (native_path, expected_repo) in whitespace_scenarios {
+            let result = PathMapper::path_to_repo_subpath(Path::new(native_path))?;
+            assert_eq!(result, expected_repo,
+                "Comprehensive whitespace test failed for: {}", native_path);
         }
         Ok(())
     }
@@ -502,7 +632,7 @@ mod tests {
         }
 
         let mock_repositories = vec![
-            // User home repositories
+            // User home repositories (original)
             MockRepository {
                 native_path: PathBuf::from("/home/tim/documents"),
                 repo_subpath: "user_home/tim/documents".to_string(),
@@ -514,7 +644,19 @@ mod tests {
                 category: "user_home".to_string(),
             },
 
-            // Docker volume repositories
+            // User home repositories with whitespace
+            MockRepository {
+                native_path: PathBuf::from("/home/gamer/.local/share/Paradox Interactive"),
+                repo_subpath: "user_home/gamer/.local_share_Paradox Interactive".to_string(),
+                category: "user_home".to_string(),
+            },
+            MockRepository {
+                native_path: PathBuf::from("/home/user/.config/Google Chrome"),
+                repo_subpath: "user_home/user/.config_Google Chrome".to_string(),
+                category: "user_home".to_string(),
+            },
+
+            // Docker volume repositories (original)
             MockRepository {
                 native_path: PathBuf::from("/mnt/docker-data/volumes/postgres"),
                 repo_subpath: "docker_volume/postgres".to_string(),
@@ -526,7 +668,19 @@ mod tests {
                 category: "docker_volume".to_string(),
             },
 
-            // System repositories
+            // Docker volume repositories with whitespace
+            MockRepository {
+                native_path: PathBuf::from("/mnt/docker-data/volumes/my app data"),
+                repo_subpath: "docker_volume/my app data".to_string(),
+                category: "docker_volume".to_string(),
+            },
+            MockRepository {
+                native_path: PathBuf::from("/mnt/docker-data/volumes/web server config"),
+                repo_subpath: "docker_volume/web server config".to_string(),
+                category: "docker_volume".to_string(),
+            },
+
+            // System repositories (original)
             MockRepository {
                 native_path: PathBuf::from("/etc/nginx"),
                 repo_subpath: "system/etc_nginx".to_string(),
@@ -535,6 +689,18 @@ mod tests {
             MockRepository {
                 native_path: PathBuf::from("/var/log/app"),
                 repo_subpath: "system/var_log_app".to_string(),
+                category: "system".to_string(),
+            },
+
+            // System repositories with whitespace
+            MockRepository {
+                native_path: PathBuf::from("/usr/share/applications/My Application"),
+                repo_subpath: "system/usr_share_applications_My Application".to_string(),
+                category: "system".to_string(),
+            },
+            MockRepository {
+                native_path: PathBuf::from("/opt/Google Chrome"),
+                repo_subpath: "system/opt_Google Chrome".to_string(),
                 category: "system".to_string(),
             },
         ];
@@ -561,10 +727,10 @@ mod tests {
             .filter(|r| r.category == "system")
             .count();
 
-        assert_eq!(user_home_count, 2);
-        assert_eq!(docker_volume_count, 2);
-        assert_eq!(system_count, 2);
-        assert_eq!(mock_repositories.len(), 6);
+        assert_eq!(user_home_count, 4); // 2 original + 2 whitespace
+        assert_eq!(docker_volume_count, 4); // 2 original + 2 whitespace
+        assert_eq!(system_count, 4); // 2 original + 2 whitespace
+        assert_eq!(mock_repositories.len(), 12);
 
         Ok(())
     }

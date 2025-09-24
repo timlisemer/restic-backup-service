@@ -86,6 +86,18 @@ mod tests {
             "/home/alice/projects",
             "/home/user123/data",
             "/home/user-name/files",
+
+            // Whitespace path scenarios
+            "/home/user/.local/share/Paradox Interactive",
+            "/home/gamer/Documents/My Games",
+            "/home/user/Software Installation Files",
+            "/home/alice/.steam/steam/steamapps/common/Game Name",
+            "/home/tim/.config/My Application",
+            "/home/user/Downloads/My Project Files",
+            "/home/developer/Projects/Cool App Name",
+            "/home/user/Music/My Favorite Songs",
+            "/home/gamer/.local/share/Steam Games",
+            "/home/user/Videos/Home Movies Collection",
         ];
 
         for path_str in test_cases {
@@ -112,6 +124,18 @@ mod tests {
             "/mnt/docker-data/volumes/redis_cache",
             "/mnt/docker-data/volumes/app-volume/nested/path",
             "/mnt/docker-data/volumes/complex-name-123",
+
+            // Whitespace docker volume scenarios
+            "/mnt/docker-data/volumes/my app data",
+            "/mnt/docker-data/volumes/game server config",
+            "/mnt/docker-data/volumes/web app storage",
+            "/mnt/docker-data/volumes/My Database Backup",
+            "/mnt/docker-data/volumes/Application Config Files",
+            "/mnt/docker-data/volumes/media server content",
+            "/mnt/docker-data/volumes/backup storage volume",
+            "/mnt/docker-data/volumes/My Personal Files",
+            "/mnt/docker-data/volumes/Development Environment",
+            "/mnt/docker-data/volumes/shared app resources",
         ];
 
         for path_str in test_cases {
@@ -142,6 +166,20 @@ mod tests {
             "/root/.config",
             "/tmp/backup",
             "/srv/www",
+
+            // Whitespace system path scenarios
+            "/usr/share/applications/My Application",
+            "/opt/Google Chrome",
+            "/var/log/system events",
+            "/etc/systemd/system/my service.service",
+            "/usr/local/share/Application Data",
+            "/opt/Software Installation",
+            "/var/cache/package manager",
+            "/etc/Network Manager",
+            "/usr/share/icons/My Theme",
+            "/srv/web application files",
+            "/tmp/temporary backup files",
+            "/root/.local/share/My Settings",
         ];
 
         for path_str in test_cases {
@@ -205,22 +243,60 @@ mod tests {
     }
 
     #[test]
-    fn test_backup_repo_comprehensive_workflow() -> Result<(), BackupServiceError> {
-        // Test complete workflow with different path types
+    fn test_category_detection_whitespace_edge_cases() -> Result<(), BackupServiceError> {
+        // Test edge cases with whitespace paths
+        let edge_cases = vec![
+            // Paths with multiple spaces
+            ("/home/user/My    Project    Files", "user_home"),
+            ("/mnt/docker-data/volumes/app  with  spaces", "docker_volume"),
+            ("/usr/share/My  Application  Data", "system"),
 
-        // User home workflow
-        let user_repo = BackupRepo::new(PathBuf::from("/home/tim/documents"))?.with_count(15)?;
+            // Paths with leading/trailing spaces in components
+            ("/home/user/ leading space", "user_home"),
+            ("/home/user/trailing space ", "user_home"),
+            ("/mnt/docker-data/volumes/ docker volume ", "docker_volume"),
+
+            // Paths with special whitespace characters (tabs, newlines would be unusual but test robustness)
+            ("/home/user/tab\tseparated", "user_home"),
+
+            // Mixed special characters and spaces
+            ("/home/user/.local/share/App-Name With Spaces", "user_home"),
+            ("/mnt/docker-data/volumes/my-app data_v2", "docker_volume"),
+            ("/etc/systemd/system/my-service with spaces.service", "system"),
+
+            // Real-world gaming and application paths
+            ("/home/user/.steam/steam/steamapps/common/Counter Strike", "user_home"),
+            ("/home/gamer/.local/share/Paradox Interactive/Europa Universalis IV", "user_home"),
+            ("/home/user/.config/Google Chrome", "user_home"),
+            ("/home/developer/Projects/My Awesome App", "user_home"),
+        ];
+
+        for (path, expected_category) in edge_cases {
+            let repo = BackupRepo::new(PathBuf::from(path))?;
+            assert_eq!(repo.category()?, expected_category,
+                "Failed for whitespace edge case: {}", path);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_backup_repo_comprehensive_workflow() -> Result<(), BackupServiceError> {
+        // Test complete workflow with different path types including whitespace
+
+        // User home workflow with whitespace
+        let user_repo = BackupRepo::new(PathBuf::from("/home/tim/.local/share/My Documents"))?.with_count(15)?;
         assert_eq!(user_repo.category()?, "user_home");
         assert_eq!(user_repo.snapshot_count, 15);
 
-        // Docker volume workflow
+        // Docker volume workflow with whitespace
         let docker_repo =
-            BackupRepo::new(PathBuf::from("/mnt/docker-data/volumes/postgres"))?.with_count(8)?;
+            BackupRepo::new(PathBuf::from("/mnt/docker-data/volumes/postgres backup data"))?.with_count(8)?;
         assert_eq!(docker_repo.category()?, "docker_volume");
         assert_eq!(docker_repo.snapshot_count, 8);
 
-        // System path workflow
-        let system_repo = BackupRepo::new(PathBuf::from("/etc/nginx"))?.with_count(3)?;
+        // System path workflow with whitespace
+        let system_repo = BackupRepo::new(PathBuf::from("/usr/share/applications/My App"))?.with_count(3)?;
         assert_eq!(system_repo.category()?, "system");
         assert_eq!(system_repo.snapshot_count, 3);
 
