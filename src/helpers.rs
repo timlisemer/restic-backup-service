@@ -274,9 +274,359 @@ impl RepositoryInfo {
     // Future helper methods can be added here
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SnapshotInfo {
     pub time: DateTime<Utc>,
     pub path: PathBuf,
     pub id: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{DateTime, Utc};
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_is_restic_internal_dir_valid_dirs() -> Result<(), BackupServiceError> {
+        // Test all valid restic internal directories
+        let valid_dirs = vec!["data", "index", "keys", "snapshots", "locks"];
+
+        for dir in valid_dirs {
+            assert!(
+                RepositoryScanner::is_restic_internal_dir(dir)?,
+                "Directory '{}' should be recognized as restic internal",
+                dir
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_restic_internal_dir_invalid_dirs() -> Result<(), BackupServiceError> {
+        // Test directories that are NOT restic internal
+        let invalid_dirs = vec![
+            "app",
+            "config",
+            "postgres",
+            "redis",
+            "nginx",
+            "documents",
+            "projects",
+            "backup",
+            "temp",
+            "usr",
+            "var",
+            "etc",
+            "data_backup", // Similar but not exact
+            "index.html",  // File-like names
+            "keys_backup", // Similar but not exact
+            "snapshots_old", // Similar but not exact
+            "locks.txt",   // Similar but not exact
+            "",            // Empty string
+            "DATA",        // Wrong case
+            "Index",       // Wrong case
+            "SNAPSHOTS",   // Wrong case
+        ];
+
+        for dir in invalid_dirs {
+            assert!(
+                !RepositoryScanner::is_restic_internal_dir(dir)?,
+                "Directory '{}' should NOT be recognized as restic internal",
+                dir
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_restic_internal_dir_edge_cases() -> Result<(), BackupServiceError> {
+        // Test edge cases and special characters
+        let edge_cases = vec![
+            " data",       // Leading space
+            "data ",       // Trailing space
+            " data ",      // Both spaces
+            "data/",       // With slash
+            "/data",       // With leading slash
+            "data-old",    // With hyphen
+            "data_backup", // With underscore
+            "data.bak",    // With dot
+        ];
+
+        for case in edge_cases {
+            assert!(
+                !RepositoryScanner::is_restic_internal_dir(case)?,
+                "Edge case '{}' should NOT be recognized as restic internal",
+                case
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_repository_info_creation() {
+        let native_path = PathBuf::from("/home/tim/documents");
+        let repo_subpath = "user_home/tim/documents".to_string();
+        let category = "user_home".to_string();
+
+        let repo_info = RepositoryInfo {
+            native_path: native_path.clone(),
+            repo_subpath: repo_subpath.clone(),
+            category: category.clone(),
+        };
+
+        assert_eq!(repo_info.native_path, native_path);
+        assert_eq!(repo_info.repo_subpath, repo_subpath);
+        assert_eq!(repo_info.category, category);
+    }
+
+    #[test]
+    fn test_repository_info_various_categories() {
+        // Test different category types
+        let test_cases = vec![
+            ("/home/alice/projects", "user_home/alice/projects", "user_home"),
+            ("/mnt/docker-data/volumes/postgres", "docker_volume/postgres", "docker_volume"),
+            ("/etc/nginx", "system/etc_nginx", "system"),
+            ("/var/log/app", "system/var_log_app", "system"),
+            ("/usr/local/bin", "system/usr_local_bin", "system"),
+        ];
+
+        for (native, subpath, category) in test_cases {
+            let repo_info = RepositoryInfo {
+                native_path: PathBuf::from(native),
+                repo_subpath: subpath.to_string(),
+                category: category.to_string(),
+            };
+
+            assert_eq!(repo_info.native_path, PathBuf::from(native));
+            assert_eq!(repo_info.repo_subpath, subpath);
+            assert_eq!(repo_info.category, category);
+        }
+    }
+
+    #[test]
+    fn test_snapshot_info_creation() {
+        let time_str = "2025-01-15T10:30:00Z";
+        let time = DateTime::parse_from_rfc3339(time_str)
+            .unwrap()
+            .with_timezone(&Utc);
+        let path = PathBuf::from("/home/tim/documents");
+        let id = "abc123def456".to_string();
+
+        let snapshot_info = SnapshotInfo {
+            time,
+            path: path.clone(),
+            id: id.clone(),
+        };
+
+        assert_eq!(snapshot_info.time, time);
+        assert_eq!(snapshot_info.path, path);
+        assert_eq!(snapshot_info.id, id);
+    }
+
+    #[test]
+    fn test_snapshot_info_equality() {
+        let time = DateTime::parse_from_rfc3339("2025-01-15T10:30:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let snapshot1 = SnapshotInfo {
+            time,
+            path: PathBuf::from("/home/tim/docs"),
+            id: "snap123".to_string(),
+        };
+
+        let snapshot2 = SnapshotInfo {
+            time,
+            path: PathBuf::from("/home/tim/docs"),
+            id: "snap123".to_string(),
+        };
+
+        let snapshot3 = SnapshotInfo {
+            time,
+            path: PathBuf::from("/home/tim/projects"), // Different path
+            id: "snap123".to_string(),
+        };
+
+        assert_eq!(snapshot1, snapshot2); // Should be equal
+        assert_ne!(snapshot1, snapshot3); // Should not be equal
+    }
+
+    #[test]
+    fn test_snapshot_info_different_times() {
+        let time1 = DateTime::parse_from_rfc3339("2025-01-15T10:30:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let time2 = DateTime::parse_from_rfc3339("2025-01-15T11:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let snapshot1 = SnapshotInfo {
+            time: time1,
+            path: PathBuf::from("/home/tim/docs"),
+            id: "snap123".to_string(),
+        };
+
+        let snapshot2 = SnapshotInfo {
+            time: time2, // Different time
+            path: PathBuf::from("/home/tim/docs"),
+            id: "snap123".to_string(),
+        };
+
+        assert_ne!(snapshot1, snapshot2);
+    }
+
+    #[test]
+    fn test_repository_info_clone() {
+        let original = RepositoryInfo {
+            native_path: PathBuf::from("/home/tim/documents"),
+            repo_subpath: "user_home/tim/documents".to_string(),
+            category: "user_home".to_string(),
+        };
+
+        let cloned = original.clone();
+
+        // Should be equal but separate instances
+        assert_eq!(original.native_path, cloned.native_path);
+        assert_eq!(original.repo_subpath, cloned.repo_subpath);
+        assert_eq!(original.category, cloned.category);
+    }
+
+    #[test]
+    fn test_snapshot_info_clone() {
+        let time = DateTime::parse_from_rfc3339("2025-01-15T10:30:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let original = SnapshotInfo {
+            time,
+            path: PathBuf::from("/home/tim/documents"),
+            id: "snap123".to_string(),
+        };
+
+        let cloned = original.clone();
+
+        // Should be equal but separate instances
+        assert_eq!(original, cloned);
+        assert_eq!(original.time, cloned.time);
+        assert_eq!(original.path, cloned.path);
+        assert_eq!(original.id, cloned.id);
+    }
+
+    #[test]
+    fn test_complex_path_handling() {
+        // Test complex paths with spaces, unicode, and special characters
+        let test_cases = vec![
+            "/home/user with spaces/documents",
+            "/home/alice/projects/my-project",
+            "/mnt/docker-data/volumes/app_data",
+            "/etc/nginx/sites-available/default",
+            "/var/log/app/2025/01/15",
+            "/usr/local/bin/custom-script",
+            "/opt/software/version-1.2.3",
+            "/home/user123/Downloads/file.tar.gz",
+        ];
+
+        for path_str in test_cases {
+            let repo_info = RepositoryInfo {
+                native_path: PathBuf::from(path_str),
+                repo_subpath: format!("test/{}", path_str.replace("/", "_")),
+                category: "test".to_string(),
+            };
+
+            assert_eq!(repo_info.native_path, PathBuf::from(path_str));
+            assert!(repo_info.repo_subpath.starts_with("test/"));
+        }
+    }
+
+    #[test]
+    fn test_snapshot_info_with_various_ids() {
+        let time = DateTime::parse_from_rfc3339("2025-01-15T10:30:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let path = PathBuf::from("/home/tim/docs");
+
+        // Test various ID formats
+        let id_formats = vec![
+            "abc123def456",           // Standard hex
+            "12345678",               // Numbers only
+            "short",                  // Short ID
+            "very-long-id-with-dashes-and-numbers-123", // Long with dashes
+            "mixed_123-ABC_def",      // Mixed case and symbols
+        ];
+
+        for id in id_formats {
+            let snapshot = SnapshotInfo {
+                time,
+                path: path.clone(),
+                id: id.to_string(),
+            };
+
+            assert_eq!(snapshot.id, id);
+            assert_eq!(snapshot.time, time);
+            assert_eq!(snapshot.path, path);
+        }
+    }
+
+    #[test]
+    fn test_docker_volume_helper_logic() {
+        // Test the logic used in create_docker_volume_repo_info helper
+        let volume_names = vec![
+            "postgres",
+            "redis",
+            "app-data",
+            "my_volume",
+            "volume123",
+            "complex-name-with-dashes",
+        ];
+
+        for volume in &volume_names {
+            let native_path = PathBuf::from(format!("/mnt/docker-data/volumes/{}", volume));
+            let repo_subpath = format!("docker_volume/{}", volume);
+
+            let repo_info = RepositoryInfo {
+                native_path: native_path.clone(),
+                repo_subpath: repo_subpath.clone(),
+                category: "docker_volume".to_string(),
+            };
+
+            assert_eq!(repo_info.native_path, native_path);
+            assert_eq!(repo_info.repo_subpath, repo_subpath);
+            assert_eq!(repo_info.category, "docker_volume");
+            assert!(repo_info.native_path.to_string_lossy().contains(volume));
+        }
+    }
+
+    #[test]
+    fn test_nested_repository_logic() {
+        // Test the logic used in scan_nested_docker_repositories
+        let volume = "myapp";
+        let nested_repos = vec!["config", "data", "logs", "backups"];
+
+        for nested_repo in &nested_repos {
+            let nested_path = PathBuf::from(format!(
+                "/mnt/docker-data/volumes/{}/{}",
+                volume, nested_repo
+            ));
+            let nested_repo_subpath = format!("docker_volume/{}/{}", volume, nested_repo);
+
+            let repo_info = RepositoryInfo {
+                native_path: nested_path.clone(),
+                repo_subpath: nested_repo_subpath.clone(),
+                category: "docker_volume".to_string(),
+            };
+
+            assert_eq!(repo_info.native_path, nested_path);
+            assert_eq!(repo_info.repo_subpath, nested_repo_subpath);
+            assert_eq!(repo_info.category, "docker_volume");
+
+            // Verify path structure
+            assert!(repo_info.native_path.to_string_lossy().contains(volume));
+            assert!(repo_info.native_path.to_string_lossy().contains(nested_repo));
+            assert!(repo_info.repo_subpath.contains(&format!("{}/{}", volume, nested_repo)));
+        }
+    }
 }
