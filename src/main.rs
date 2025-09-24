@@ -1,14 +1,15 @@
 use clap::{Parser, Subcommand};
 use tracing::{info, warn};
 
-mod config;
-mod repository;
-mod utils;
-mod helpers;
 mod backup;
-mod list;
-mod restore;
+mod config;
 mod errors;
+mod helpers;
+mod list;
+mod repository;
+mod restore;
+mod shared;
+mod utils;
 
 #[derive(Parser)]
 #[command(name = "restic-backup-service")]
@@ -57,8 +58,8 @@ enum Commands {
 }
 
 fn init_logging() -> Result<(), crate::errors::BackupServiceError> {
-    use tracing_subscriber::{EnvFilter, fmt::writer::MakeWriterExt};
     use tracing_appender::rolling;
+    use tracing_subscriber::{fmt::writer::MakeWriterExt, EnvFilter};
 
     // Create logs directory if it doesn't exist
     std::fs::create_dir_all("./logs")?;
@@ -66,8 +67,7 @@ fn init_logging() -> Result<(), crate::errors::BackupServiceError> {
     let file_appender = rolling::daily("./logs", "restic-backup.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     tracing_subscriber::fmt()
         .with_writer(std::io::stdout.and(non_blocking))
@@ -100,7 +100,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::List { host, json } => {
             list::list_backups(config.unwrap(), host, json).await?;
         }
-        Commands::Restore { host, path, timestamp } => {
+        Commands::Restore {
+            host,
+            path,
+            timestamp,
+        } => {
             restore::restore_interactive(config.unwrap(), host, path, timestamp).await?;
         }
         Commands::Size { path } => {

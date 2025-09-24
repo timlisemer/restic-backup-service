@@ -24,8 +24,8 @@ impl Config {
         let aws_access_key_id = env::var("AWS_ACCESS_KEY_ID")?;
         let aws_secret_access_key = env::var("AWS_SECRET_ACCESS_KEY")?;
 
-        let aws_default_region = env::var("AWS_DEFAULT_REGION")
-            .unwrap_or_else(|_| "auto".to_string());
+        let aws_default_region =
+            env::var("AWS_DEFAULT_REGION").unwrap_or_else(|_| "auto".to_string());
 
         let aws_s3_endpoint = env::var("AWS_S3_ENDPOINT")?;
 
@@ -38,12 +38,11 @@ impl Config {
             .collect();
 
         // Get hostname from env or system
-        let hostname = env::var("BACKUP_HOSTNAME")
-            .unwrap_or_else(|_| {
-                hostname::get()
-                    .map(|h| h.to_string_lossy().to_string())
-                    .unwrap_or_else(|_| "unknown".to_string())
-            });
+        let hostname = env::var("BACKUP_HOSTNAME").unwrap_or_else(|_| {
+            hostname::get()
+                .map(|h| h.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "unknown".to_string())
+        });
 
         Ok(Config {
             restic_password,
@@ -82,7 +81,10 @@ impl Config {
                 }
             }
         }
-        Err(BackupServiceError::ConfigurationError(format!("Could not extract bucket name from repo base: {}", self.restic_repo_base)))
+        Err(BackupServiceError::ConfigurationError(format!(
+            "Could not extract bucket name from repo base: {}",
+            self.restic_repo_base
+        )))
     }
 
     /// Get the base path within the bucket (after bucket name)
@@ -112,6 +114,9 @@ impl Config {
 
     /// Get full repository URL for a specific path
     pub fn get_repo_url(&self, subpath: &str) -> Result<String, BackupServiceError> {
-        Ok(format!("{}/{}/{}", self.restic_repo_base, self.hostname, subpath))
+        Ok(format!(
+            "{}/{}/{}",
+            self.restic_repo_base, self.hostname, subpath
+        ))
     }
 }

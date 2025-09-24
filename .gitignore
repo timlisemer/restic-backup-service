@@ -2,3 +2,5 @@
 Cargo.lock
 /bindings
 Cargo.lock
+/logs
+.env

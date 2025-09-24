@@ -1,7 +1,5 @@
-use std::path::PathBuf;
 use crate::errors::BackupServiceError;
-
-
+use std::path::PathBuf;
 
 /// Information about a backup repository
 #[derive(Debug, Clone)]
@@ -34,4 +32,3 @@ impl BackupRepo {
         Ok(result)
     }
 }
-

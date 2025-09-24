@@ -1,10 +1,8 @@
-use std::process::Command;
 use crate::config::Config;
 use crate::errors::BackupServiceError;
 use std::path::Path;
-use tracing::{info, warn, error};
-
-
+use std::process::Command;
+use tracing::{error, info, warn};
 
 /// Validate credentials by testing basic S3 and restic connectivity
 pub async fn validate_credentials(config: &Config) -> Result<(), BackupServiceError> {
@@ -15,8 +13,11 @@ pub async fn validate_credentials(config: &Config) -> Result<(), BackupServiceEr
 
     let output = Command::new("aws")
         .args([
-            "s3", "ls", &format!("s3://{}/", s3_bucket),
-            "--endpoint-url", &config.s3_endpoint()?,
+            "s3",
+            "ls",
+            &format!("s3://{}/", s3_bucket),
+            "--endpoint-url",
+            &config.s3_endpoint()?,
         ])
         .env("AWS_ACCESS_KEY_ID", &config.aws_access_key_id)
         .env("AWS_SECRET_ACCESS_KEY", &config.aws_secret_access_key)
@@ -40,12 +41,13 @@ pub async fn validate_credentials(config: &Config) -> Result<(), BackupServiceEr
 
 /// Show the size of a path in the repository
 pub async fn show_size(config: Config, path: String) -> Result<(), BackupServiceError> {
-    use crate::helpers::{PathMapper, ResticCommand};
+    use crate::shared::commands::ResticCommandExecutor;
+    use crate::shared::paths::PathMapper;
 
     let native_path = Path::new(&path);
     let repo_subpath = PathMapper::path_to_repo_subpath(native_path)?;
     let repo_url = config.get_repo_url(&repo_subpath)?;
-    let restic_cmd = ResticCommand::new(config, repo_url)?;
+    let restic_cmd = ResticCommandExecutor::new(config, repo_url)?;
 
     info!(path = %path, "Checking size for path");
 
@@ -84,4 +86,3 @@ pub fn format_bytes(bytes: u64) -> Result<String, BackupServiceError> {
 
     Ok(formatted)
 }
-

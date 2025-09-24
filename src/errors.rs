@@ -16,7 +16,6 @@ pub enum BackupServiceError {
     #[error("Command execution failed: {0}")]
     CommandFailed(String),
 
-
     // Context-specific operation errors
     #[error("Credential validation failed: {0}")]
     CredentialValidationFailed(#[source] Box<BackupServiceError>),
@@ -48,7 +47,6 @@ pub enum BackupServiceError {
 }
 
 impl BackupServiceError {
-
     pub fn with_validation_context(self) -> BackupServiceError {
         BackupServiceError::CredentialValidationFailed(Box::new(self))
     }
@@ -57,13 +55,20 @@ impl BackupServiceError {
     pub fn from_stderr(stderr: &str, context: &str) -> Self {
         let stderr_lower = stderr.to_lowercase();
 
-        if stderr_lower.contains("access denied") || stderr_lower.contains("invalid credentials") ||
-           stderr_lower.contains("authorization") || stderr_lower.contains("forbidden") ||
-           stderr_lower.contains("access key") || stderr_lower.contains("secret key") {
+        if stderr_lower.contains("access denied")
+            || stderr_lower.contains("invalid credentials")
+            || stderr_lower.contains("authorization")
+            || stderr_lower.contains("forbidden")
+            || stderr_lower.contains("access key")
+            || stderr_lower.contains("secret key")
+        {
             BackupServiceError::AuthenticationFailed
-        } else if stderr_lower.contains("network") || stderr_lower.contains("connection") ||
-                  stderr_lower.contains("timeout") || stderr_lower.contains("unreachable") ||
-                  stderr_lower.contains("dns") {
+        } else if stderr_lower.contains("network")
+            || stderr_lower.contains("connection")
+            || stderr_lower.contains("timeout")
+            || stderr_lower.contains("unreachable")
+            || stderr_lower.contains("dns")
+        {
             BackupServiceError::NetworkError
         } else if stderr_lower.contains("repository") && stderr_lower.contains("not found") {
             BackupServiceError::RepositoryNotFound(context.to_string())
@@ -72,9 +77,6 @@ impl BackupServiceError {
         }
     }
 }
-
-
-
 
 #[cfg(test)]
 mod tests {
@@ -108,6 +110,9 @@ mod tests {
         let base_error = BackupServiceError::AuthenticationFailed;
         let wrapped = base_error.with_validation_context();
 
-        assert!(matches!(wrapped, BackupServiceError::CredentialValidationFailed(_)));
+        assert!(matches!(
+            wrapped,
+            BackupServiceError::CredentialValidationFailed(_)
+        ));
     }
 }
