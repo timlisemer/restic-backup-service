@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::errors::Result;
+use crate::errors::BackupServiceError;
 use crate::helpers::{RepositoryScanner, SnapshotCollector, SnapshotInfo};
 use crate::repository::BackupRepo;
 use crate::utils::validate_credentials;
@@ -7,14 +7,14 @@ use serde_json::json;
 use std::collections::HashMap;
 use tracing::{info, warn};
 
-pub async fn list_hosts(config: Config) -> Result<()> {
+pub async fn list_hosts(config: Config) -> Result<(), BackupServiceError> {
     info!("Getting available hosts...");
-    config.set_aws_env();
+    config.set_aws_env()?;
 
     // Validate credentials before trying to list hosts
     validate_credentials(&config).await?;
 
-    let scanner = RepositoryScanner::new(config);
+    let scanner = RepositoryScanner::new(config)?;
     let hosts = scanner.get_hosts().await?;
 
     if hosts.is_empty() {
@@ -29,9 +29,13 @@ pub async fn list_hosts(config: Config) -> Result<()> {
     Ok(())
 }
 
-pub async fn list_backups(config: Config, host: Option<String>, json_output: bool) -> Result<()> {
+pub async fn list_backups(
+    config: Config,
+    host: Option<String>,
+    json_output: bool,
+) -> Result<(), BackupServiceError> {
     let hostname = host.unwrap_or_else(|| config.hostname.clone());
-    config.set_aws_env();
+    config.set_aws_env()?;
 
     if !json_output {
         info!(hostname = %hostname, "Listing backups from S3 bucket");
@@ -40,8 +44,8 @@ pub async fn list_backups(config: Config, host: Option<String>, json_output: boo
     // Validate credentials before trying to list backups
     validate_credentials(&config).await?;
 
-    let scanner = RepositoryScanner::new(config.clone());
-    let snapshot_collector = SnapshotCollector::new(config.clone());
+    let scanner = RepositoryScanner::new(config.clone())?;
+    let snapshot_collector = SnapshotCollector::new(config.clone())?;
 
     // Scan all repositories using the unified scanner
     let repo_infos = scanner.scan_repositories(&hostname).await?;
@@ -55,7 +59,7 @@ pub async fn list_backups(config: Config, host: Option<String>, json_output: boo
             .get_snapshots(&hostname, &repo_info.repo_subpath, &repo_info.native_path)
             .await?;
         if count > 0 {
-            repos.push(BackupRepo::new(repo_info.native_path).with_count(count));
+            repos.push(BackupRepo::new(repo_info.native_path)?.with_count(count)?);
             all_snapshots.extend(snapshots);
         }
     }
@@ -66,7 +70,7 @@ pub async fn list_backups(config: Config, host: Option<String>, json_output: boo
             "host": hostname,
             "repositories": repos.iter().map(|r| json!({
                 "path": r.native_path.to_string_lossy(),
-                "category": r.category(),
+                "category": r.category().unwrap_or("unknown"),
                 "snapshot_count": r.snapshot_count
             })).collect::<Vec<_>>(),
             "snapshots": all_snapshots.iter().map(|s| json!({
@@ -87,14 +91,14 @@ pub async fn list_backups(config: Config, host: Option<String>, json_output: boo
 fn display_backup_summary(
     repos: &[BackupRepo],
     snapshots: &[SnapshotInfo],
-) -> crate::errors::Result<()> {
+) -> Result<(), BackupServiceError> {
     println!("\nBACKUP PATHS SUMMARY:");
     println!("====================");
 
     // Group by category
     let mut categories: HashMap<&str, Vec<&BackupRepo>> = HashMap::new();
     for repo in repos {
-        categories.entry(repo.category()).or_default().push(repo);
+        categories.entry(repo.category()?).or_default().push(repo);
     }
 
     // Display User Home

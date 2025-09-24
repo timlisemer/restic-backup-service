@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::errors::Result;
+use crate::errors::BackupServiceError;
 use crate::helpers::{RepositoryScanner, ResticCommand};
 use crate::utils::validate_credentials;
 use chrono::{DateTime, Duration, Utc};
@@ -13,8 +13,8 @@ pub async fn restore_interactive(
     host_opt: Option<String>,
     path_opt: Option<String>,
     timestamp_opt: Option<String>,
-) -> Result<()> {
-    config.set_aws_env();
+) -> Result<(), BackupServiceError> {
+    config.set_aws_env()?;
 
     info!("Restic Interactive Restore Tool");
 
@@ -226,7 +226,7 @@ pub async fn restore_interactive(
             "Restoring repository"
         );
 
-        let repo_url = config.get_repo_url(&repo.repo_subpath);
+        let repo_url = config.get_repo_url(&repo.repo_subpath)?;
 
         // Find best snapshot within time window
         let window_end = selected_timestamp + Duration::minutes(5);
@@ -244,7 +244,7 @@ pub async fn restore_interactive(
             });
 
         if let Some(snapshot) = best_snapshot {
-            let restic_cmd = ResticCommand::new(config.clone(), repo_url);
+            let restic_cmd = ResticCommand::new(config.clone(), repo_url)?;
             let result = restic_cmd
                 .restore(
                     &snapshot.id,
@@ -346,8 +346,8 @@ pub async fn restore_interactive(
     Ok(())
 }
 
-async fn get_available_hosts(config: &Config) -> Result<Vec<String>> {
-    let scanner = RepositoryScanner::new(config.clone());
+async fn get_available_hosts(config: &Config) -> Result<Vec<String>, BackupServiceError> {
+    let scanner = RepositoryScanner::new(config.clone())?;
     scanner.get_hosts().await
 }
 
@@ -365,8 +365,8 @@ struct RestoreSnapshot {
     time: DateTime<Utc>,
 }
 
-async fn collect_backup_data(config: &Config, hostname: &str) -> Result<Vec<RestoreRepo>> {
-    let scanner = RepositoryScanner::new(config.clone());
+async fn collect_backup_data(config: &Config, hostname: &str) -> Result<Vec<RestoreRepo>, BackupServiceError> {
+    let scanner = RepositoryScanner::new(config.clone())?;
 
     // Get all repositories using the unified scanner
     let repo_infos = scanner.scan_repositories(hostname).await?;
@@ -392,9 +392,9 @@ async fn get_repo_snapshots(
     config: &Config,
     hostname: &str,
     repo_subpath: &str,
-) -> Result<Option<Vec<RestoreSnapshot>>> {
+) -> Result<Option<Vec<RestoreSnapshot>>, BackupServiceError> {
     let repo_url = format!("{}/{}/{}", config.restic_repo_base, hostname, repo_subpath);
-    let restic_cmd = ResticCommand::new(config.clone(), repo_url);
+    let restic_cmd = ResticCommand::new(config.clone(), repo_url)?;
 
     let snapshots = restic_cmd.snapshots(None).await?;
 

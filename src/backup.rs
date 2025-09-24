@@ -1,16 +1,19 @@
 use crate::config::Config;
-use crate::errors::Result;
+use crate::errors::BackupServiceError;
 use crate::helpers::{PathMapper, ResticCommand};
 use crate::utils::validate_credentials;
-use std::path::{Path, PathBuf};
 use indicatif::{ProgressBar, ProgressStyle};
-use tracing::{info, warn, error};
+use std::path::{Path, PathBuf};
+use tracing::{error, info, warn};
 
-pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result<()> {
+pub async fn run_backup(
+    config: Config,
+    additional_paths: Vec<String>,
+) -> Result<(), BackupServiceError> {
     let hostname = &config.hostname.clone();
     info!(hostname = %hostname, "Starting backup process");
 
-    config.set_aws_env();
+    config.set_aws_env()?;
 
     // Validate credentials before doing any backup work
     validate_credentials(&config).await?;
@@ -31,7 +34,8 @@ pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
-                    let name = path.file_name()
+                    let name = path
+                        .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or_default();
                     // Skip non-volume entries
@@ -53,7 +57,7 @@ pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result
     pb.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")?
-            .progress_chars("#>-")
+            .progress_chars("#>-"),
     );
 
     let mut success_count = 0;
@@ -71,8 +75,8 @@ pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result
         }
 
         let repo_subpath = PathMapper::path_to_repo_subpath(path)?;
-        let repo_url = config.get_repo_url(&repo_subpath);
-        let restic_cmd = ResticCommand::new(config.clone(), repo_url);
+        let repo_url = config.get_repo_url(&repo_subpath)?;
+        let restic_cmd = ResticCommand::new(config.clone(), repo_url)?;
 
         // Initialize repository if needed
         restic_cmd.init_if_needed().await?;
@@ -131,4 +135,3 @@ pub async fn run_backup(config: Config, additional_paths: Vec<String>) -> Result
 
     Ok(())
 }
-

@@ -1,4 +1,4 @@
-use crate::errors::{BackupServiceError, Result};
+use crate::errors::BackupServiceError;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::PathBuf;
@@ -16,7 +16,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn load() -> Result<Self> {
+    pub fn load() -> Result<Self, BackupServiceError> {
         dotenv::dotenv().ok();
 
         let restic_password = env::var("RESTIC_PASSWORD")?;
@@ -58,17 +58,17 @@ impl Config {
     }
 
     /// Get S3 endpoint URL from repo base
-    pub fn s3_endpoint(&self) -> String {
+    pub fn s3_endpoint(&self) -> Result<String, BackupServiceError> {
         if let Some(endpoint) = self.restic_repo_base.strip_prefix("s3:") {
             if let Some(pos) = endpoint.find('/') {
-                return endpoint[..pos].to_string();
+                return Ok(endpoint[..pos].to_string());
             }
         }
-        self.aws_s3_endpoint.clone()
+        Ok(self.aws_s3_endpoint.clone())
     }
 
     /// Get S3 bucket name from repo base
-    pub fn s3_bucket(&self) -> Result<String> {
+    pub fn s3_bucket(&self) -> Result<String, BackupServiceError> {
         if let Some(s3_path) = self.restic_repo_base.strip_prefix("s3:") {
             // Remove protocol and extract bucket
             if let Some(path_start) = s3_path.find("//") {
@@ -86,31 +86,32 @@ impl Config {
     }
 
     /// Get the base path within the bucket (after bucket name)
-    pub fn s3_base_path(&self) -> String {
+    pub fn s3_base_path(&self) -> Result<String, BackupServiceError> {
         if let Some(s3_path) = self.restic_repo_base.strip_prefix("s3:") {
             if let Some(path_start) = s3_path.find("//") {
                 let path = &s3_path[path_start + 2..];
                 if let Some(slash_pos) = path.find('/') {
                     let after_domain = &path[slash_pos + 1..];
                     if let Some(next_slash) = after_domain.find('/') {
-                        return after_domain[next_slash + 1..].to_string();
+                        return Ok(after_domain[next_slash + 1..].to_string());
                     }
                 }
             }
         }
-        String::new()
+        Ok(String::new())
     }
 
     /// Set AWS environment variables for restic
-    pub fn set_aws_env(&self) {
+    pub fn set_aws_env(&self) -> Result<(), BackupServiceError> {
         env::set_var("AWS_ACCESS_KEY_ID", &self.aws_access_key_id);
         env::set_var("AWS_SECRET_ACCESS_KEY", &self.aws_secret_access_key);
         env::set_var("AWS_DEFAULT_REGION", &self.aws_default_region);
         env::set_var("RESTIC_PASSWORD", &self.restic_password);
+        Ok(())
     }
 
     /// Get full repository URL for a specific path
-    pub fn get_repo_url(&self, subpath: &str) -> String {
-        format!("{}/{}/{}", self.restic_repo_base, self.hostname, subpath)
+    pub fn get_repo_url(&self, subpath: &str) -> Result<String, BackupServiceError> {
+        Ok(format!("{}/{}/{}", self.restic_repo_base, self.hostname, subpath))
     }
 }

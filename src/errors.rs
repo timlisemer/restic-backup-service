@@ -16,8 +16,6 @@ pub enum BackupServiceError {
     #[error("Command execution failed: {0}")]
     CommandFailed(String),
 
-    #[error("Invalid repository path or configuration")]
-    InvalidRepository,
 
     // Context-specific operation errors
     #[error("Credential validation failed: {0}")]
@@ -77,8 +75,6 @@ impl BackupServiceError {
 
 
 
-/// Helper type alias for Result with BackupServiceError
-pub type Result<T> = std::result::Result<T, BackupServiceError>;
 
 #[cfg(test)]
 mod tests {

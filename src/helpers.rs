@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::errors::{BackupServiceError, Result};
+use crate::errors::BackupServiceError;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -14,7 +14,7 @@ pub struct PathMapper;
 
 impl PathMapper {
     /// Convert native filesystem path to repository subpath (exact NixOS getLocation logic)
-    pub fn path_to_repo_subpath(path: &Path) -> Result<String> {
+    pub fn path_to_repo_subpath(path: &Path) -> Result<String, BackupServiceError> {
         let path_str = path.to_string_lossy();
 
         let result = if let Some(stripped) = path_str.strip_prefix("/home/") {
@@ -50,7 +50,7 @@ impl PathMapper {
     }
 
     /// Convert S3 directory name back to native path (preserve filename underscores)
-    pub fn s3_to_native_path(s3_dir: &str) -> Result<String> {
+    pub fn s3_to_native_path(s3_dir: &str) -> Result<String, BackupServiceError> {
         let result = if s3_dir.matches('_').count() > 1 {
             s3_dir.replace('_', "/")
         } else {
@@ -60,7 +60,7 @@ impl PathMapper {
     }
 
     /// Determine backup tag based on path (exact NixOS logic)
-    pub fn determine_tag(path: &Path) -> Result<&'static str> {
+    pub fn determine_tag(path: &Path) -> Result<&'static str, BackupServiceError> {
         let path_str = path.to_string_lossy();
         let tag = if path_str.starts_with("/home/") {
             "user-path"
@@ -83,12 +83,12 @@ pub struct ResticCommand {
 }
 
 impl ResticCommand {
-    pub fn new(config: Config, repo_url: String) -> Self {
-        Self { repo_url, config }
+    pub fn new(config: Config, repo_url: String) -> Result<Self, BackupServiceError> {
+        Ok(Self { repo_url, config })
     }
 
     /// Initialize repository if needed
-    pub async fn init_if_needed(&self) -> Result<()> {
+    pub async fn init_if_needed(&self) -> Result<(), BackupServiceError> {
         if !self.repo_exists().await? {
             info!(repo_url = %self.repo_url, "Initializing repository");
             self.run_command(&["init"]).await?;
@@ -98,13 +98,13 @@ impl ResticCommand {
     }
 
     /// Check if repository exists
-    pub async fn repo_exists(&self) -> Result<bool> {
+    pub async fn repo_exists(&self) -> Result<bool, BackupServiceError> {
         let result = self.run_command(&["snapshots", "--json"]).await.is_ok();
         Ok(result)
     }
 
     /// Run backup with exact NixOS parameters
-    pub async fn backup(&self, path: &Path, hostname: &str) -> Result<String> {
+    pub async fn backup(&self, path: &Path, hostname: &str) -> Result<String, BackupServiceError> {
         let path_str = path.to_string_lossy();
         let tag = PathMapper::determine_tag(path)?;
 
@@ -116,7 +116,7 @@ impl ResticCommand {
     }
 
     /// Get snapshots as JSON
-    pub async fn snapshots(&self, path: Option<&str>) -> Result<Vec<Value>> {
+    pub async fn snapshots(&self, path: Option<&str>) -> Result<Vec<Value>, BackupServiceError> {
         let mut args = vec!["snapshots", "--json"];
         if let Some(p) = path {
             args.extend(&["--path", p]);
@@ -128,13 +128,13 @@ impl ResticCommand {
     }
 
     /// Restore snapshot
-    pub async fn restore(&self, snapshot_id: &str, path: &str, target: &str) -> Result<String> {
+    pub async fn restore(&self, snapshot_id: &str, path: &str, target: &str) -> Result<String, BackupServiceError> {
         self.run_command(&["restore", snapshot_id, "--path", path, "--target", target])
             .await
     }
 
     /// Get repository stats
-    pub async fn stats(&self, path: &str) -> Result<u64> {
+    pub async fn stats(&self, path: &str) -> Result<u64, BackupServiceError> {
         let output = self
             .run_command(&[
                 "stats", "latest", "--mode", "raw-data", "--json", "--path", path,
@@ -150,7 +150,7 @@ impl ResticCommand {
     }
 
     /// Core command execution with exact NixOS environment setup
-    async fn run_command(&self, args: &[&str]) -> Result<String> {
+    async fn run_command(&self, args: &[&str]) -> Result<String, BackupServiceError> {
         let output = Command::new("restic")
             .args(["--repo", &self.repo_url])
             .args(args)
@@ -181,16 +181,16 @@ pub struct RepositoryScanner {
 }
 
 impl RepositoryScanner {
-    pub fn new(config: Config) -> Self {
-        Self { config }
+    pub fn new(config: Config) -> Result<Self, BackupServiceError> {
+        Ok(Self { config })
     }
 
     /// List S3 directories with proper error handling
-    pub async fn list_s3_dirs(&self, s3_path: &str) -> Result<Vec<String>> {
+    pub async fn list_s3_dirs(&self, s3_path: &str) -> Result<Vec<String>, BackupServiceError> {
         let s3_bucket = self
             .config
             .s3_bucket()
-            .map_err(|_| BackupServiceError::InvalidRepository)?;
+            ?;
         let full_path = format!("s3://{}/{}", s3_bucket, s3_path);
 
         let output = Command::new("aws")
@@ -199,7 +199,7 @@ impl RepositoryScanner {
                 "ls",
                 &full_path,
                 "--endpoint-url",
-                &self.config.s3_endpoint(),
+                &self.config.s3_endpoint()?,
             ])
             .env("AWS_ACCESS_KEY_ID", &self.config.aws_access_key_id)
             .env("AWS_SECRET_ACCESS_KEY", &self.config.aws_secret_access_key)
@@ -231,22 +231,22 @@ impl RepositoryScanner {
     }
 
     /// Check if directory name is restic internal structure
-    pub fn is_restic_internal_dir(dir_name: &str) -> bool {
-        matches!(dir_name, "data" | "index" | "keys" | "snapshots" | "locks")
+    pub fn is_restic_internal_dir(dir_name: &str) -> Result<bool, BackupServiceError> {
+        Ok(matches!(dir_name, "data" | "index" | "keys" | "snapshots" | "locks"))
     }
 
     /// Get available hosts from S3 bucket
-    pub async fn get_hosts(&self) -> Result<Vec<String>> {
-        let base_path = self.config.s3_base_path();
+    pub async fn get_hosts(&self) -> Result<Vec<String>, BackupServiceError> {
+        let base_path = self.config.s3_base_path()?;
         self.list_s3_dirs(&base_path).await
     }
 
     /// Scan and collect all repositories for a hostname
-    pub async fn scan_repositories(&self, hostname: &str) -> Result<Vec<RepositoryInfo>> {
+    pub async fn scan_repositories(&self, hostname: &str) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
         let mut repos = Vec::new();
 
         // Scan user home directories
-        let user_home_path = format!("{}/{}/user_home", self.config.s3_base_path(), hostname);
+        let user_home_path = format!("{}/{}/user_home", self.config.s3_base_path()?, hostname);
         if let Ok(users) = self.list_s3_dirs(&user_home_path).await {
             for user in users {
                 let user_path = format!("{}/{}", user_home_path, user);
@@ -268,7 +268,7 @@ impl RepositoryScanner {
         }
 
         // Scan docker volumes with nested repository detection
-        let docker_path = format!("{}/{}/docker_volume", self.config.s3_base_path(), hostname);
+        let docker_path = format!("{}/{}/docker_volume", self.config.s3_base_path()?, hostname);
         if let Ok(volumes) = self.list_s3_dirs(&docker_path).await {
             for volume in volumes {
                 let native_path = PathBuf::from(format!("/mnt/docker-data/volumes/{}", volume));
@@ -284,7 +284,7 @@ impl RepositoryScanner {
                 let volume_path = format!("{}/{}", docker_path, volume);
                 if let Ok(nested) = self.list_s3_dirs(&volume_path).await {
                     for nested_repo in nested {
-                        if !Self::is_restic_internal_dir(&nested_repo) {
+                        if !Self::is_restic_internal_dir(&nested_repo)? {
                             let nested_path = PathBuf::from(format!(
                                 "/mnt/docker-data/volumes/{}/{}",
                                 volume, nested_repo
@@ -304,7 +304,7 @@ impl RepositoryScanner {
         }
 
         // Scan system paths
-        let system_path = format!("{}/{}/system", self.config.s3_base_path(), hostname);
+        let system_path = format!("{}/{}/system", self.config.s3_base_path()?, hostname);
         if let Ok(paths) = self.list_s3_dirs(&system_path).await {
             for path in paths {
                 let native_path_str = PathMapper::s3_to_native_path(&path)?;
@@ -332,8 +332,8 @@ pub struct SnapshotCollector {
 }
 
 impl SnapshotCollector {
-    pub fn new(config: Config) -> Self {
-        Self { config }
+    pub fn new(config: Config) -> Result<Self, BackupServiceError> {
+        Ok(Self { config })
     }
 
     /// Get snapshots for a repository with count
@@ -342,11 +342,11 @@ impl SnapshotCollector {
         hostname: &str,
         repo_subpath: &str,
         native_path: &Path,
-    ) -> Result<(usize, Vec<SnapshotInfo>)> {
+    ) -> Result<(usize, Vec<SnapshotInfo>), BackupServiceError> {
         let repo_url = self
             .config
-            .get_repo_url(&format!("{}/{}", hostname, repo_subpath));
-        let restic_cmd = ResticCommand::new(self.config.clone(), repo_url);
+            .get_repo_url(&format!("{}/{}", hostname, repo_subpath))?;
+        let restic_cmd = ResticCommand::new(self.config.clone(), repo_url)?;
 
         let snapshots = restic_cmd
             .snapshots(Some(&native_path.to_string_lossy()))
@@ -398,7 +398,7 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn test_path_to_repo_subpath() -> Result<()> {
+    fn test_path_to_repo_subpath() -> Result<(), BackupServiceError> {
         assert_eq!(
             PathMapper::path_to_repo_subpath(Path::new("/home/tim"))?,
             "user_home/tim"

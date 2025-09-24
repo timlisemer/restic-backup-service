@@ -1,22 +1,22 @@
 use std::process::Command;
 use crate::config::Config;
-use crate::errors::{BackupServiceError, Result};
+use crate::errors::BackupServiceError;
 use std::path::Path;
 use tracing::{info, warn, error};
 
 
 
 /// Validate credentials by testing basic S3 and restic connectivity
-pub async fn validate_credentials(config: &Config) -> Result<()> {
+pub async fn validate_credentials(config: &Config) -> Result<(), BackupServiceError> {
     info!("🔑 Validating credentials...");
 
     // Test S3 connectivity by listing bucket root
-    let s3_bucket = config.s3_bucket().map_err(|_| BackupServiceError::InvalidRepository)?;
+    let s3_bucket = config.s3_bucket()?;
 
     let output = Command::new("aws")
         .args([
             "s3", "ls", &format!("s3://{}/", s3_bucket),
-            "--endpoint-url", &config.s3_endpoint(),
+            "--endpoint-url", &config.s3_endpoint()?,
         ])
         .env("AWS_ACCESS_KEY_ID", &config.aws_access_key_id)
         .env("AWS_SECRET_ACCESS_KEY", &config.aws_secret_access_key)
@@ -39,13 +39,13 @@ pub async fn validate_credentials(config: &Config) -> Result<()> {
 }
 
 /// Show the size of a path in the repository
-pub async fn show_size(config: Config, path: String) -> Result<()> {
+pub async fn show_size(config: Config, path: String) -> Result<(), BackupServiceError> {
     use crate::helpers::{PathMapper, ResticCommand};
 
     let native_path = Path::new(&path);
     let repo_subpath = PathMapper::path_to_repo_subpath(native_path)?;
-    let repo_url = config.get_repo_url(&repo_subpath);
-    let restic_cmd = ResticCommand::new(config, repo_url);
+    let repo_url = config.get_repo_url(&repo_subpath)?;
+    let restic_cmd = ResticCommand::new(config, repo_url)?;
 
     info!(path = %path, "Checking size for path");
 
@@ -66,7 +66,7 @@ pub async fn show_size(config: Config, path: String) -> Result<()> {
 }
 
 /// Format bytes to human readable format
-pub fn format_bytes(bytes: u64) -> Result<String> {
+pub fn format_bytes(bytes: u64) -> Result<String, BackupServiceError> {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
     let mut size = bytes as f64;
     let mut unit_index = 0;

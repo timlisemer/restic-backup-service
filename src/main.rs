@@ -56,7 +56,7 @@ enum Commands {
     Init,
 }
 
-fn init_logging() -> crate::errors::Result<()> {
+fn init_logging() -> Result<(), crate::errors::BackupServiceError> {
     use tracing_subscriber::{EnvFilter, fmt::writer::MakeWriterExt};
     use tracing_appender::rolling;
 
@@ -117,7 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn init_env_file() -> crate::errors::Result<()> {
+fn init_env_file() -> Result<(), crate::errors::BackupServiceError> {
     use std::fs;
     use std::path::Path;
 
