@@ -4,10 +4,12 @@ use crate::shared::commands::ResticCommandExecutor;
 use crate::shared::operations::RepositoryData;
 use crate::shared::paths::PathMapper;
 use chrono::{DateTime, Utc};
-use futures::future::try_join_all;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use tracing::info;
 
 // ============================================================================
@@ -84,265 +86,206 @@ impl RepositoryScanner {
         }
     }
 
-    /// Scan and collect all repositories for a hostname using modular category scanners
+    /// Scan and collect all repositories for a hostname with true parallelization
     pub async fn scan_repositories(
         &self,
         hostname: &str,
     ) -> Result<Vec<RepositoryData>, BackupServiceError> {
-        // First, count total repositories for progress tracking
-        let total_repos = self.count_total_repositories(hostname).await?;
-        let counter = AtomicUsize::new(0);
+        // First, discover all repositories across all categories
+        let all_repo_infos = self.discover_all_repositories(hostname).await?;
+        let total_repos = all_repo_infos.len();
+        let counter = Arc::new(AtomicUsize::new(0));
 
-        let mut repos = Vec::new();
+        if total_repos == 0 {
+            info!("Scanning completed!");
+            return Ok(Vec::new());
+        }
 
-        // Use category-specific scanning functions with parallel checking
-        repos.extend(
-            self.scan_user_home_repositories(hostname, &counter, total_repos)
-                .await?,
-        );
-        repos.extend(
-            self.scan_docker_volume_repositories(hostname, &counter, total_repos)
-                .await?,
-        );
-        repos.extend(
-            self.scan_system_repositories(hostname, &counter, total_repos)
-                .await?,
-        );
+        info!("Found {} repositories to check", total_repos);
+
+        // Spawn actual Tokio tasks for TRUE parallel execution
+        let mut tasks = Vec::new();
+
+        for repo_info in all_repo_infos {
+            let snapshot_collector = self.snapshot_collector.clone();
+            let counter_clone = counter.clone();
+
+            let task = tokio::spawn(async move {
+                let current = counter_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                let native_path = &repo_info.native_path;
+                let repo_subpath = &repo_info.repo_subpath;
+
+                info!(
+                    "Checking ({}/{}) - {}",
+                    current,
+                    total_repos,
+                    native_path.display()
+                );
+
+                let (count, snapshots) = snapshot_collector
+                    .get_snapshots(repo_subpath, native_path)
+                    .await?;
+
+                if count > 0 {
+                    info!(
+                        "✓ ({}/{}) - {} snapshots found",
+                        current, total_repos, count
+                    );
+                    Ok::<Option<RepositoryData>, BackupServiceError>(Some(RepositoryData {
+                        info: repo_info,
+                        snapshots,
+                        snapshot_count: count,
+                    }))
+                } else {
+                    Ok::<Option<RepositoryData>, BackupServiceError>(None)
+                }
+            });
+
+            tasks.push(task);
+        }
+
+        // Wait for all tasks to complete
+        let mut results = Vec::new();
+        for task in tasks {
+            match task.await {
+                Ok(result) => results.push(result?),
+                Err(join_error) => {
+                    return Err(BackupServiceError::CommandFailed(format!(
+                        "Task join error: {}",
+                        join_error
+                    )))
+                }
+            }
+        }
+        let repos: Vec<RepositoryData> = results.into_iter().flatten().collect();
 
         info!("Scanning completed!");
         Ok(repos)
     }
 
-    /// Count total repositories across all categories for progress tracking
-    async fn count_total_repositories(&self, hostname: &str) -> Result<usize, BackupServiceError> {
-        let mut count = 0;
-
-        // Count user home repositories
-        let user_home_path = self.build_s3_path(hostname, "user_home")?;
-        if let Ok(users) = self.list_s3_dirs(&user_home_path).await {
-            for user in users {
-                let user_path = format!("{}/{}", user_home_path, user);
-                if let Ok(subdirs) = self.list_s3_dirs(&user_path).await {
-                    count += subdirs.len();
-                }
-            }
-        }
-
-        // Count docker volumes
-        let docker_path = self.build_s3_path(hostname, "docker_volume")?;
-        if let Ok(volumes) = self.list_s3_dirs(&docker_path).await {
-            count += volumes.len();
-        }
-
-        // Count system repositories
-        let system_path = self.build_s3_path(hostname, "system")?;
-        if let Ok(paths) = self.list_s3_dirs(&system_path).await {
-            count += paths.len();
-        }
-
-        Ok(count)
-    }
-
-    /// Scan user home directories specifically
-    pub async fn scan_user_home_repositories(
+    /// Discover all repositories across all categories without checking snapshots
+    async fn discover_all_repositories(
         &self,
         hostname: &str,
-        counter: &AtomicUsize,
-        total_repos: usize,
-    ) -> Result<Vec<RepositoryData>, BackupServiceError> {
-        let user_home_path = self.build_s3_path(hostname, "user_home")?;
-
-        info!("Scanning user home directories...");
+    ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
         let mut all_repos = Vec::new();
 
-        if let Ok(users) = self.list_s3_dirs(&user_home_path).await {
-            for user in users {
-                info!("Processing user: {}", user);
-                let user_path = format!("{}/{}", user_home_path, user);
+        // Discover user home repositories
+        all_repos.extend(self.discover_user_home_repositories(hostname).await?);
 
-                if let Ok(subdirs) = self.list_s3_dirs(&user_path).await {
-                    // Create parallel checking tasks for all subdirs of this user
-                    let check_futures: Vec<_> = subdirs
-                        .into_iter()
-                        .map(|subdir| {
-                            let snapshot_collector = self.snapshot_collector.clone();
-                            let user = user.clone();
-                            async move {
-                                let current = counter.fetch_add(1, Ordering::SeqCst) + 1;
+        // Discover docker volume repositories
+        all_repos.extend(self.discover_docker_volume_repositories(hostname).await?);
+
+        // Discover system repositories
+        all_repos.extend(self.discover_system_repositories(hostname).await?);
+
+        Ok(all_repos)
+    }
+
+    /// Discover repositories for a specific category
+    async fn discover_repositories_by_category(
+        &self,
+        hostname: &str,
+        category: &str,
+    ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
+        let category_path = self.build_s3_path(hostname, category)?;
+        let mut repos = Vec::new();
+
+        info!("Scanning {} directories...", category);
+
+        match category {
+            "user_home" => {
+                // User home has nested structure: users -> subdirs
+                if let Ok(users) = self.list_s3_dirs(&category_path).await {
+                    for user in users {
+                        info!("Processing user: {}", user);
+                        let user_path = format!("{}/{}", category_path, user);
+
+                        if let Ok(subdirs) = self.list_s3_dirs(&user_path).await {
+                            for subdir in subdirs {
                                 let native_subdir = PathMapper::s3_to_native_path(&subdir)?;
                                 let native_path =
                                     PathBuf::from(format!("/home/{}/{}", user, native_subdir));
                                 let repo_subpath = format!("user_home/{}/{}", user, subdir);
 
-                                info!(
-                                    "Checking ({}/{}) - {}",
-                                    current,
-                                    total_repos,
-                                    native_path.display()
-                                );
-
-                                let (count, snapshots) = snapshot_collector
-                                    .get_snapshots(&repo_subpath, &native_path)
-                                    .await?;
-
-                                if count > 0 {
-                                    info!(
-                                        "✓ ({}/{}) - {} snapshots found",
-                                        current, total_repos, count
-                                    );
-                                    Ok::<Option<RepositoryData>, BackupServiceError>(Some(
-                                        RepositoryData {
-                                            info: RepositoryInfo {
-                                                native_path,
-                                                repo_subpath,
-                                                category: "user_home".to_string(),
-                                            },
-                                            snapshots,
-                                            snapshot_count: count,
-                                        },
-                                    ))
-                                } else {
-                                    Ok::<Option<RepositoryData>, BackupServiceError>(None)
-                                }
+                                repos.push(RepositoryInfo {
+                                    native_path,
+                                    repo_subpath,
+                                    category: "user_home".to_string(),
+                                });
                             }
-                        })
-                        .collect();
-
-                    // Wait for all checks for this user to complete
-                    let results: Vec<Option<RepositoryData>> = try_join_all(check_futures).await?;
-                    all_repos.extend(results.into_iter().flatten());
+                        }
+                    }
                 }
             }
-        }
-
-        Ok(all_repos)
-    }
-
-    /// Scan docker volumes with nested repository detection
-    pub async fn scan_docker_volume_repositories(
-        &self,
-        hostname: &str,
-        counter: &AtomicUsize,
-        total_repos: usize,
-    ) -> Result<Vec<RepositoryData>, BackupServiceError> {
-        let docker_path = self.build_s3_path(hostname, "docker_volume")?;
-
-        info!("Scanning docker volumes...");
-        let mut all_repos = Vec::new();
-
-        if let Ok(volumes) = self.list_s3_dirs(&docker_path).await {
-            // Create parallel checking tasks for all volumes
-            let check_futures: Vec<_> = volumes
-                .into_iter()
-                .map(|volume| {
-                    let snapshot_collector = self.snapshot_collector.clone();
-                    async move {
-                        let current = counter.fetch_add(1, Ordering::SeqCst) + 1;
+            "docker_volume" => {
+                // Docker volumes have flat structure
+                if let Ok(volumes) = self.list_s3_dirs(&category_path).await {
+                    for volume in volumes {
                         let native_path =
                             PathBuf::from(format!("/mnt/docker-data/volumes/{}", volume));
                         let repo_subpath = format!("docker_volume/{}", volume);
 
-                        info!(
-                            "Checking ({}/{}) - {}",
-                            current,
-                            total_repos,
-                            native_path.display()
-                        );
-
-                        let (count, snapshots) = snapshot_collector
-                            .get_snapshots(&repo_subpath, &native_path)
-                            .await?;
-
-                        if count > 0 {
-                            info!(
-                                "✓ ({}/{}) - {} snapshots found",
-                                current, total_repos, count
-                            );
-                            Ok::<Option<RepositoryData>, BackupServiceError>(Some(RepositoryData {
-                                info: RepositoryInfo {
-                                    native_path,
-                                    repo_subpath,
-                                    category: "docker_volume".to_string(),
-                                },
-                                snapshots,
-                                snapshot_count: count,
-                            }))
-                        } else {
-                            Ok::<Option<RepositoryData>, BackupServiceError>(None)
-                        }
+                        repos.push(RepositoryInfo {
+                            native_path,
+                            repo_subpath,
+                            category: "docker_volume".to_string(),
+                        });
                     }
-                })
-                .collect();
-
-            // Wait for all checks to complete
-            let results: Vec<Option<RepositoryData>> = try_join_all(check_futures).await?;
-            all_repos.extend(results.into_iter().flatten());
-        }
-
-        Ok(all_repos)
-    }
-
-    /// Scan system paths specifically
-    pub async fn scan_system_repositories(
-        &self,
-        hostname: &str,
-        counter: &AtomicUsize,
-        total_repos: usize,
-    ) -> Result<Vec<RepositoryData>, BackupServiceError> {
-        let system_path = self.build_s3_path(hostname, "system")?;
-
-        info!("Scanning system paths...");
-
-        if let Ok(paths) = self.list_s3_dirs(&system_path).await {
-            // Create parallel checking tasks for all system paths
-            let check_futures: Vec<_> = paths
-                .into_iter()
-                .map(|path| {
-                    let snapshot_collector = self.snapshot_collector.clone();
-                    async move {
-                        let current = counter.fetch_add(1, Ordering::SeqCst) + 1;
+                }
+            }
+            "system" => {
+                // System paths have flat structure with path mapping
+                if let Ok(paths) = self.list_s3_dirs(&category_path).await {
+                    for path in paths {
                         let native_path_str = PathMapper::s3_to_native_path(&path)?;
                         let native_path = PathBuf::from(format!("/{}", native_path_str));
                         let repo_subpath = format!("system/{}", path);
 
-                        info!(
-                            "Checking ({}/{}) - {}",
-                            current,
-                            total_repos,
-                            native_path.display()
-                        );
-
-                        let (count, snapshots) = snapshot_collector
-                            .get_snapshots(&repo_subpath, &native_path)
-                            .await?;
-
-                        if count > 0 {
-                            info!(
-                                "✓ ({}/{}) - {} snapshots found",
-                                current, total_repos, count
-                            );
-                            Ok::<Option<RepositoryData>, BackupServiceError>(Some(RepositoryData {
-                                info: RepositoryInfo {
-                                    native_path,
-                                    repo_subpath,
-                                    category: "system".to_string(),
-                                },
-                                snapshots,
-                                snapshot_count: count,
-                            }))
-                        } else {
-                            Ok::<Option<RepositoryData>, BackupServiceError>(None)
-                        }
+                        repos.push(RepositoryInfo {
+                            native_path,
+                            repo_subpath,
+                            category: "system".to_string(),
+                        });
                     }
-                })
-                .collect();
-
-            // Wait for all checks to complete
-            let results: Vec<Option<RepositoryData>> = try_join_all(check_futures).await?;
-            Ok(results.into_iter().flatten().collect())
-        } else {
-            Ok(Vec::new())
+                }
+            }
+            _ => {
+                return Err(BackupServiceError::ConfigurationError(format!(
+                    "Unknown repository category: {}",
+                    category
+                )));
+            }
         }
+
+        Ok(repos)
+    }
+
+    /// Discover user home repositories without checking snapshots
+    async fn discover_user_home_repositories(
+        &self,
+        hostname: &str,
+    ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
+        self.discover_repositories_by_category(hostname, "user_home")
+            .await
+    }
+
+    /// Discover docker volume repositories without checking snapshots
+    async fn discover_docker_volume_repositories(
+        &self,
+        hostname: &str,
+    ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
+        self.discover_repositories_by_category(hostname, "docker_volume")
+            .await
+    }
+
+    /// Discover system repositories without checking snapshots
+    async fn discover_system_repositories(
+        &self,
+        hostname: &str,
+    ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
+        self.discover_repositories_by_category(hostname, "system")
+            .await
     }
 }
 
