@@ -1,0 +1,351 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CI: true
+
+jobs:
+  # ==============================================================================
+  # Rust Tests and Linting
+  # ==============================================================================
+  rust-check:
+    name: Rust Tests & Linting
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+
+    - name: Cache Rust dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Check Rust environment
+      run: |
+        command -v cargo >/dev/null 2>&1 || (echo "ERROR: cargo not found" && exit 1)
+        command -v git >/dev/null 2>&1 || (echo "ERROR: git not found" && exit 1)
+
+    - name: Format check
+      run: cargo fmt -- --check
+
+    - name: Clippy check
+      run: cargo clippy --all-targets --all-features -- -D warnings
+
+    - name: Run Rust tests
+      run: make test
+
+  # ==============================================================================
+  # Nix Flake Build and Module Validation
+  # ==============================================================================
+  nix-build:
+    name: Nix Flake Build & Module Validation
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Nix
+      uses: cachix/install-nix-action@v26
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+        extra_nix_config: |
+          experimental-features = nix-command flakes
+          accept-flake-config = true
+          access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+
+    - name: Setup Nix Cache
+      uses: cachix/cachix-action@v14
+      with:
+        name: nix-community
+        authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+        skipPush: ${{ secrets.CACHIX_AUTH_TOKEN == '' }}
+
+    - name: Verify clean repository (no flake.lock)
+      run: |
+        if [ -f flake.lock ]; then
+          echo "ERROR: flake.lock found in repository!"
+          echo "This file should be in .gitignore and generated only in CI."
+          exit 1
+        fi
+        echo "Repository is clean - no flake.lock found"
+
+    - name: Install Rust toolchain for Cargo.lock generation
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Generate Cargo.lock
+      run: cargo generate-lockfile
+
+    - name: Generate flake.lock
+      run: make ci-setup
+
+    - name: Verify flake.lock generation
+      run: |
+        if [ ! -f flake.lock ]; then
+          echo "ERROR: flake.lock was not generated!"
+          exit 1
+        fi
+        echo "flake.lock generated successfully"
+        echo "flake.lock size: $(wc -c < flake.lock) bytes"
+
+    - name: Build Nix packages
+      run: make ci-build
+
+    - name: Run full flake check
+      run: nix flake check --all-systems --print-build-logs
+
+    - name: Test NixOS module evaluation
+      run: |
+        echo "Testing NixOS module evaluation..."
+        nix eval --json '.#nixosModules.default' > /dev/null
+        echo "NixOS module evaluates correctly"
+
+    - name: Build example NixOS configuration
+      run: |
+        echo "Testing NixOS module integration..."
+        cat > test-configuration.nix << 'EOF'
+        { config, lib, pkgs, ... }:
+        {
+          imports = [ ./nixos-module.nix ];
+
+          services.restic_backup = {
+            enable = true;
+            backupPaths = [ "/tmp/test" ];
+            restic.repoBase = "s3:https://example.com/bucket/restic";
+            aws.s3Endpoint = "https://example.com";
+            # Use individual secret files for testing
+            restic.passwordFile = pkgs.writeText "password" "test-password";
+            aws.accessKeyIdFile = pkgs.writeText "access-key" "test-key";
+            aws.secretAccessKeyFile = pkgs.writeText "secret-key" "test-secret";
+          };
+        }
+        EOF
+
+        nix eval --json -f test-configuration.nix config.systemd.services.restic-backup > /dev/null
+        echo "NixOS module integration test passed"
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-artifacts-${{ github.sha }}
+        path: |
+          flake.lock
+          Cargo.lock
+        retention-days: 30
+
+    - name: Upload build results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: nix-build-results-${{ github.sha }}
+        path: |
+          result*
+        retention-days: 7
+
+  # ==============================================================================
+  # Security and Quality Checks
+  # ==============================================================================
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Rust dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-audit-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Install cargo-audit
+      run: cargo install --force cargo-audit
+
+    - name: Security audit
+      run: cargo audit
+
+    - name: Check for pre-commit violations
+      run: make pre-commit-check
+
+  # ==============================================================================
+  # Documentation and Metadata Validation
+  # ==============================================================================
+  docs-validation:
+    name: Documentation & Metadata
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Validate README links
+      run: |
+        echo "Checking for broken README links..."
+        if grep -n "http://localhost" README.md; then
+          echo "ERROR: Found localhost links in README"
+          exit 1
+        fi
+        echo "README link check passed"
+
+    - name: Validate flake metadata
+      run: |
+        echo "Checking flake.nix metadata..."
+        if ! grep -q "description.*restic.*backup" flake.nix; then
+          echo "ERROR: Flake description missing or inadequate"
+          exit 1
+        fi
+        echo "Flake metadata validation passed"
+
+    - name: Project info
+      run: make info
+
+  # ==============================================================================
+  # Integration Testing
+  # ==============================================================================
+  integration-test:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    needs: [nix-build, rust-check]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Nix
+      uses: cachix/install-nix-action@v26
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+        extra_nix_config: |
+          experimental-features = nix-command flakes
+          accept-flake-config = true
+
+    - name: Download build artifacts from nix-build
+      uses: actions/download-artifact@v4
+      with:
+        name: build-artifacts-${{ github.sha }}
+        path: .
+
+    - name: Build and test CLI functionality
+      run: |
+        echo "Building and testing CLI..."
+        nix build .#default
+        ./result/bin/restic-backup-service --help
+        rm -f .env
+        ./result/bin/restic-backup-service init
+        if [ ! -f .env ]; then
+          echo "ERROR: .env file not created by init command"
+          exit 1
+        fi
+        echo "CLI integration test passed"
+
+    - name: Test NixOS module in VM
+      run: |
+        echo "Testing NixOS module in minimal VM..."
+        cat > vm-test.nix << 'EOF'
+        { config, lib, pkgs, modulesPath, ... }:
+        {
+          imports = [
+            "${modulesPath}/virtualisation/qemu-vm.nix"
+            ./nixos-module.nix
+          ];
+
+          # Minimal VM config
+          virtualisation = {
+            graphics = false;
+            memorySize = 1024;
+          };
+
+          # Test the restic service configuration
+          services.restic_backup = {
+            enable = true;
+            backupPaths = [ "/tmp" ];
+            restic.repoBase = "s3:https://test.example.com/bucket/restic";
+            aws.s3Endpoint = "https://test.example.com";
+            # Mock secret files
+            restic.passwordFile = pkgs.writeText "password" "test-password";
+            aws.accessKeyIdFile = pkgs.writeText "access-key" "test-key";
+            aws.secretAccessKeyFile = pkgs.writeText "secret-key" "test-secret";
+          };
+
+          # Minimal system config
+          boot.loader.grub.enable = false;
+          fileSystems."/".device = "/dev/disk/by-label/nixos";
+          system.stateVersion = "24.05";
+        }
+        EOF
+
+        nix build -f vm-test.nix config.system.build.vm --no-link
+        echo "NixOS module VM test passed"
+
+  # ==============================================================================
+  # Summary
+  # ==============================================================================
+  ci-success:
+    name: CI Success
+    runs-on: ubuntu-latest
+    needs: [rust-check, nix-build, security-audit, docs-validation, integration-test]
+    if: always()
+
+    steps:
+    - name: Check all jobs success
+      run: |
+        echo "CI Pipeline Results:"
+        echo "==================="
+
+        if [ "${{ needs.rust-check.result }}" != "success" ]; then
+          echo "ERROR: Rust checks failed"
+          exit 1
+        fi
+
+        if [ "${{ needs.nix-build.result }}" != "success" ]; then
+          echo "ERROR: Nix build failed"
+          exit 1
+        fi
+
+        if [ "${{ needs.security-audit.result }}" != "success" ]; then
+          echo "ERROR: Security audit failed"
+          exit 1
+        fi
+
+        if [ "${{ needs.docs-validation.result }}" != "success" ]; then
+          echo "ERROR: Documentation validation failed"
+          exit 1
+        fi
+
+        if [ "${{ needs.integration-test.result }}" != "success" ]; then
+          echo "ERROR: Integration tests failed"
+          exit 1
+        fi
+
+        echo "All CI jobs passed successfully"
+        echo "Artifacts generated: flake.lock and build results"

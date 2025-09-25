@@ -168,6 +168,188 @@ s3://bucket/[base-path/]hostname/category/specific-path/
 
 Automatically discovers Docker volumes in `/mnt/docker-data/volumes/` while filtering out system files (`backingFsBlockDev`, `metadata.db`). Supports volume names with spaces and special characters.
 
+## NixOS Flake Usage
+
+This repository can be used as a NixOS flake to provide declarative backup configuration through `services.restic_backup`.
+
+### Adding to Your Flake
+
+Add this repository to your flake inputs:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    restic-backup-service.url = "github:timlisemer/restic-backup-service";
+    # ... other inputs
+  };
+
+  outputs = { self, nixpkgs, restic-backup-service, ... }: {
+    nixosConfigurations.yourhostname = nixpkgs.lib.nixosSystem {
+      modules = [
+        restic-backup-service.nixosModules.default
+        ./configuration.nix
+      ];
+    };
+  };
+}
+```
+
+### Basic Configuration
+
+```nix
+services.restic_backup = {
+  enable = true;
+
+  # Use sops-nix for secrets
+  secretsFile = config.sops.secrets.restic-env.path;
+
+  # Define backup paths
+  backupPaths = [
+    "/home/user/Documents"
+    "/home/user/.config"
+    "/home/user/.local/share/Steam"
+  ];
+
+  # Optional: Schedule periodic backups
+  schedule = "daily";  # or "hourly", "weekly", "monthly", or systemd timer format
+};
+```
+
+### Secrets Management
+
+#### Option 1: Single secrets file (recommended for sops-nix)
+
+Create a secrets file with all required variables:
+```bash
+# In your secrets file (e.g., managed by sops-nix)
+RESTIC_PASSWORD=your_password
+RESTIC_REPO_BASE=s3:https://account-id.r2.cloudflarestorage.com/bucket/restic
+AWS_ACCESS_KEY_ID=your_access_key
+AWS_SECRET_ACCESS_KEY=your_secret_key
+AWS_S3_ENDPOINT=https://account-id.r2.cloudflarestorage.com
+```
+
+Then reference it in your NixOS configuration:
+```nix
+services.restic_backup = {
+  enable = true;
+  secretsFile = config.sops.secrets.restic-env.path;
+  backupPaths = [ "/home/user/Documents" ];
+};
+```
+
+#### Option 2: Individual secret files
+
+```nix
+services.restic_backup = {
+  enable = true;
+
+  backupPaths = [ "/home/user/Documents" ];
+
+  restic = {
+    passwordFile = config.sops.secrets.restic-password.path;
+    repoBase = "s3:https://account-id.r2.cloudflarestorage.com/bucket/restic";
+  };
+
+  aws = {
+    accessKeyIdFile = config.sops.secrets.aws-access-key.path;
+    secretAccessKeyFile = config.sops.secrets.aws-secret-key.path;
+    s3Endpoint = "https://account-id.r2.cloudflarestorage.com";
+  };
+};
+```
+
+### Advanced Configuration
+
+```nix
+services.restic_backup = {
+  enable = true;
+
+  # Custom package (e.g., if building from a different source)
+  package = inputs.restic-backup-service.packages.${pkgs.system}.default;
+
+  # Comprehensive configuration
+  backupPaths = [
+    "/home/user/Documents"
+    "/home/user/.config"
+    "/home/gamer/.local/share/Paradox Interactive"  # Gaming directories
+    "/home/developer/Projects"
+  ];
+
+  # Custom hostname (defaults to system hostname)
+  hostname = "my-backup-host";
+
+  # Secrets management
+  secretsFile = config.sops.secrets.restic-env.path;
+
+  # AWS configuration
+  aws.defaultRegion = "auto";  # Cloudflare R2
+
+  # Systemd timer for automatic backups
+  schedule = "06:00";  # Daily at 6 AM
+
+  # Additional arguments passed to restic-backup-service
+  extraArgs = [ ];
+
+  # Run as specific user (default: root)
+  user = "backup";
+  group = "backup";
+};
+```
+
+### Manual Operations
+
+Even with the service configured, you can still run manual operations:
+
+```bash
+# Manual backup
+sudo systemctl start restic-backup
+
+# Check service status
+sudo systemctl status restic-backup
+
+# View logs
+sudo journalctl -u restic-backup -f
+
+# Using the CLI directly (if package is in environment.systemPackages)
+sudo -E restic-backup-service restore
+```
+
+### Sops-nix Integration Example
+
+Complete example with sops-nix for secrets management:
+
+```nix
+# secrets.yaml (encrypted with sops)
+restic-env: |
+  RESTIC_PASSWORD=your_encrypted_password
+  RESTIC_REPO_BASE=s3:https://your-bucket.r2.cloudflarestorage.com/restic
+  AWS_ACCESS_KEY_ID=your_encrypted_access_key
+  AWS_SECRET_ACCESS_KEY=your_encrypted_secret_key
+  AWS_S3_ENDPOINT=https://your-bucket.r2.cloudflarestorage.com
+
+# configuration.nix
+{
+  sops.secrets.restic-env = {
+    sopsFile = ./secrets.yaml;
+    owner = "root";
+    group = "root";
+    mode = "0400";
+  };
+
+  services.restic_backup = {
+    enable = true;
+    secretsFile = config.sops.secrets.restic-env.path;
+    backupPaths = [
+      "/home/user/Documents"
+      "/home/user/.config"
+    ];
+    schedule = "daily";
+  };
+}
+```
+
 ## Requirements
 
 - Rust 1.70+

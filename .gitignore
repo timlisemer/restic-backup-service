@@ -1,6 +1,10 @@
 /target
 Cargo.lock
 /bindings
-Cargo.lock
 /logs
 .env
+
+# Nix flake.lock - generated only in CI
+flake.lock
+result
+result-*
