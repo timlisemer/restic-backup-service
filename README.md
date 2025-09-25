@@ -1,228 +1,210 @@
 # Restic Backup Service
 
-A Rust-based CLI application for managing restic backups with S3 (Cloudflare R2) backend storage. This tool provides automated backup, listing, and interactive restoration capabilities with the exact same repository structure as the original Nix implementation.
+A Rust-based CLI application for managing restic backups with S3-compatible storage. Built to handle complex filesystem structures including gaming directories, Docker volumes, and development environments with sophisticated path categorization and parallel processing.
 
-## Features
+## What it does
 
-- **Automated Backups**: Backup configured paths, user directories, and Docker volumes
-- **Interactive Restore**: User-friendly restoration with host, repository, and timestamp selection
-- **S3/R2 Backend**: Supports S3-compatible storage (optimized for Cloudflare R2)
-- **Repository Organization**: Maintains structured organization by host, type, and path
-- **Colored Output**: Clear, color-coded feedback for all operations
-- **NixOS Integration**: Designed to work seamlessly with NixOS and sops-nix
+This tool automates restic backups to S3-compatible storage (primarily Cloudflare R2) with intelligent path organization and provides an interactive restoration system. It was built to replace a shell script-based backup system with something more reliable and feature-rich.
+
+## Key Features
+
+- **Intelligent Path Categorization**: Automatically classifies paths into `user_home`, `docker_volume`, and `system` categories with proper S3 repository structure
+- **Parallel Repository Operations**: Uses tokio for concurrent repository scanning and operations
+- **Interactive 5-Phase Restoration**: Host selection → repository discovery → path selection → time window selection → restoration with post-restore actions
+- **Complex Path Support**: Handles paths with spaces, gaming directories (Steam, Paradox Interactive), and application data correctly
+- **Docker Integration**: Auto-discovers Docker volumes with intelligent filtering of system files
+- **Time Window Grouping**: Groups snapshots into 5-minute windows for intuitive restore point selection
+
+## Architecture
+
+The application follows a 3-tier architecture with modular design:
+
+1. **CLI Layer** (`main.rs`) - Command parsing and dispatch
+2. **Workflow Layer** (`shared/{backup,restore}_workflow.rs`) - Multi-phase orchestration
+3. **Operations Layer** (`shared/{commands,operations}.rs`) - Core business logic
+
+```
+src/
+├── main.rs              # CLI entry point with structured logging
+├── config.rs            # S3 URL parsing supporting multiple providers
+├── errors.rs            # Structured error handling with stderr parsing
+├── repository.rs        # Path categorization and repository modeling
+└── shared/              # Core functionality modules
+    ├── commands.rs      # Unified AWS/restic command execution
+    ├── operations.rs    # Parallel repository operations and scanning
+    ├── backup_workflow.rs    # 3-phase backup orchestration
+    ├── restore_workflow.rs   # Interactive restoration workflow
+    ├── ui.rs            # Interactive selection interfaces
+    ├── display.rs       # Structured output formatting
+    └── paths.rs         # Path mapping and Docker volume discovery
+```
+
+## Technical Highlights
+
+### Path Categorization System
+The application includes a sophisticated path categorization system that handles real-world complexity:
+
+```rust
+// Examples of automatic path mapping:
+"/home/gamer/.local/share/Paradox Interactive" → "user_home/gamer/.local_share_Paradox Interactive"
+"/mnt/docker-data/volumes/my app data" → "docker_volume/my app data"
+"/usr/share/applications/Visual Studio Code" → "system/usr_share_applications_Visual Studio Code"
+```
+
+This system has extensive test coverage (900+ lines) for edge cases including whitespace, special characters, and complex gaming/development directory structures.
+
+### Concurrent Repository Scanning
+Uses `tokio::spawn` for true parallelization when scanning repositories with proper progress tracking and error handling. The `RepositoryOperations` orchestrates concurrent scanning while `SnapshotCollector` caches path mappings.
+
+### Interactive Restoration Workflow
+The restore process is implemented as a 5-phase workflow:
+1. Host selection from available backups
+2. Concurrent repository discovery and scanning
+3. Repository selection (category-based or individual)
+4. Time window selection (5-minute snapshot grouping)
+5. Restoration with copy/move options to original locations
+
+### S3 Provider Support
+Includes intelligent S3 URL parsing that supports multiple providers (AWS S3, Cloudflare R2, MinIO) with automatic endpoint extraction and credential management.
+
+### Data Flow Architecture
+The application follows clear data flows: S3 bucket scanning → concurrent repository discovery → snapshot collection → UI presentation. Native filesystem paths are mapped through `PathMapper::path_to_repo_subpath` to create the S3 repository structure.
 
 ## Installation
 
+### For Users
 ```bash
-# Clone the repository
 git clone https://github.com/timlisemer/restic-backup-service.git
 cd restic-backup-service
-
-# Build the application
 cargo build --release
+```
 
-# The binary will be at target/release/restic-backup-service
+### For Development
+```bash
+# Run tests
+cargo test
+
+# Run with debug logging
+RUST_LOG=debug cargo run -- <command>
+
+# Code quality checks
+cargo check && cargo clippy
 ```
 
 ## Configuration
 
-### 1. Create Configuration File
-
-Copy the example configuration and edit with your credentials:
-
+Create a `.env` file or initialize with:
 ```bash
-cp .env.example .env
-# Edit .env with your actual values
+# Using built binary
+./restic-backup-service init
+
+# Or during development
+cargo run -- init
 ```
 
-### 2. Environment Variables
-
-The `.env` file should contain:
-
+Example configuration:
 ```env
-# Restic repository password
-RESTIC_PASSWORD=your_restic_password_here
-
-# S3/R2 Repository base URL
-RESTIC_REPO_BASE=s3:https://your-bucket.r2.cloudflarestorage.com/restic
-
-# AWS/S3 Credentials
-AWS_ACCESS_KEY_ID=your_access_key_here
-AWS_SECRET_ACCESS_KEY=your_secret_key_here
+RESTIC_PASSWORD=your_password
+RESTIC_REPO_BASE=s3:https://account-id.r2.cloudflarestorage.com/bucket/restic
+AWS_ACCESS_KEY_ID=your_key
+AWS_SECRET_ACCESS_KEY=your_secret
 AWS_DEFAULT_REGION=auto
-AWS_S3_ENDPOINT=https://your-bucket.r2.cloudflarestorage.com
-
-# Backup paths (comma-separated)
-BACKUP_PATHS=/home/user/documents,/home/user/projects
-
-# Optional: Custom hostname (defaults to system hostname)
-# BACKUP_HOSTNAME=my-custom-hostname
-```
-
-### 3. NixOS Integration
-
-For NixOS users with sops-nix, you can source credentials directly:
-
-```nix
-# In your NixOS configuration
-sops.secrets = {
-  restic_password = {};
-  restic_repo_base = {};
-  restic_environment = {
-    # Contains AWS credentials
-  };
-};
+AWS_S3_ENDPOINT=https://account-id.r2.cloudflarestorage.com
+BACKUP_PATHS=/home/user/Documents,/home/user/.config,/home/user/.local/share/Steam
 ```
 
 ## Usage
 
-### Initialize Configuration
-
-Generate a sample `.env` file:
-
+### Backup Operations
 ```bash
-./restic-backup-service init
-```
-
-### Run Backup
-
-Backup all configured paths:
-
-```bash
+# Backup all configured paths + auto-discovered Docker volumes
 ./restic-backup-service run
-```
 
-Backup specific paths:
-
-```bash
+# Backup specific additional paths
 ./restic-backup-service run /path/to/backup,/another/path
 ```
 
 ### List Backups
-
-List backups for current host:
-
 ```bash
+# Human-readable categorized output
 ./restic-backup-service list
-```
 
-List backups for specific host:
-
-```bash
-./restic-backup-service list --host other-hostname
-```
-
-Output as JSON (for scripting):
-
-```bash
+# JSON output for scripting
 ./restic-backup-service list --json
-```
 
-### Interactive Restore
-
-Start interactive restoration wizard:
-
-```bash
-./restic-backup-service restore
-```
-
-Non-interactive restore with options:
-
-```bash
-./restic-backup-service restore --host hostname --path /home/user --timestamp "2025-08-23T06:30:00Z"
-```
-
-### Show Repository Size
-
-Check how much space a path occupies:
-
-```bash
-./restic-backup-service size /home/user/documents
-```
-
-### List Available Hosts
-
-Show all hosts with backups:
-
-```bash
+# List available hosts
 ./restic-backup-service hosts
+```
+
+### Interactive Restoration
+```bash
+# Launch interactive restore wizard
+./restic-backup-service restore
+
+# Non-interactive restore with specific parameters
+./restic-backup-service restore --host hostname --path "/home/user/Documents" --timestamp "2024-01-15T10:30:00Z"
+```
+
+### Repository Analysis
+```bash
+# Check storage usage for a path
+./restic-backup-service size /home/user/Documents
 ```
 
 ## Repository Structure
 
-The application maintains the following S3 structure:
+The application organizes backups in S3 with a hierarchical structure:
 
 ```
-s3://bucket/restic/
+s3://bucket/[base-path/]hostname/category/specific-path/
 ├── hostname1/
-│   ├── user_home/
-│   │   └── username/
-│   │       └── subdirectory_path
-│   ├── docker_volume/
-│   │   └── volume_name/
-│   └── system/
-│       └── system_path
-└── hostname2/
-    └── ...
+│   ├── user_home/username/path_components/
+│   ├── docker_volume/volume_name/
+│   └── system/system_path_components/
+└── hostname2/...
 ```
 
-### Path Mapping
+## Docker Integration
 
-- `/home/user/documents` → `user_home/user/documents`
-- `/home/user/my/deep/path` → `user_home/user/my_deep_path`
-- `/mnt/docker-data/volumes/myapp` → `docker_volume/myapp`
-- `/etc/nginx` → `system/etc_nginx`
-
-## Docker Volume Support
-
-The application automatically detects and backs up Docker volumes from `/mnt/docker-data/volumes/`. Non-volume entries like `backingFsBlockDev` and `metadata.db` are automatically excluded.
-
-## Nested Repository Support
-
-For complex directory structures, the application supports nested repositories. This is particularly useful for Docker volumes with subdirectories.
+Automatically discovers Docker volumes in `/mnt/docker-data/volumes/` while filtering out system files (`backingFsBlockDev`, `metadata.db`). Supports volume names with spaces and special characters.
 
 ## Requirements
 
-- Rust 1.70 or later
-- `restic` command-line tool installed
-- `aws` CLI tool (for S3 operations)
-- S3-compatible storage (AWS S3, Cloudflare R2, MinIO, etc.)
+- Rust 1.70+
+- `restic` command-line tool
+- `aws` CLI tool
+- S3-compatible storage
 
-## Safety Features
+### Key Dependencies
+- **tokio**: Async runtime and concurrency
+- **clap**: CLI argument parsing
+- **tracing**: Structured logging with file rotation
+- **dialoguer**: Interactive UI components
+- **thiserror**: Structured error handling
 
-- Automatic repository initialization
-- Graceful handling of missing paths
-- Progress indicators for long operations
-- Confirmation prompts for destructive operations
-- Detailed error messages with recovery suggestions
+## Error Handling and Reliability
+
+The application includes comprehensive error handling with:
+- **Structured Errors**: Uses `thiserror` with intelligent stderr parsing in `BackupServiceError::from_stderr`
+- **Context Wrapping**: Validation context and operation-specific error types
+- **Graceful Degradation**: Operations continue when individual components fail
+- **Credential Validation**: Proactive S3 credential testing before operations
+- **Path Validation**: Existence checking before backup operations
+
+Logging is implemented with `tracing` and includes file rotation to `./logs/restic-backup.log`.
 
 ## Performance
 
-- Parallel backup operations for multiple paths
-- Efficient S3 queries with caching
-- Minimal memory footprint
-- Progress bars for visual feedback
+- Concurrent repository scanning with progress tracking using `tokio::spawn`
+- Memory-efficient streaming operations
+- Fast startup time for most commands
+- Handles complex directory structures and multiple repositories efficiently
 
-## Troubleshooting
+## Why Rust
 
-### Missing Credentials
-
-If you see errors about missing environment variables, ensure your `.env` file exists and contains all required values.
-
-### Repository Not Found
-
-The application automatically initializes repositories as needed. If you encounter issues, check your S3 credentials and network connectivity.
-
-### Permission Errors
-
-For system paths and Docker volumes, you may need to run with `sudo`:
-
-```bash
-sudo -E ./restic-backup-service run
-```
-
-The `-E` flag preserves environment variables.
-
-## License
-
-This project maintains compatibility with the original NixOS implementation and follows the same backup structure and conventions.
+This project was an exercise in building a production-quality CLI application in Rust, focusing on:
+- Type safety and error handling
+- Async/await patterns with tokio
+- Modular architecture with clear separation of concerns
+- Comprehensive testing including edge cases
+- Performance optimization through parallelization
