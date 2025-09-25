@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::errors::BackupServiceError;
 use crate::shared::restore_workflow::RestoreWorkflow;
 
-/// Main entry point for interactive restore - now uses the modular RestoreWorkflow
+// CLI command for interactive restore with optional pre-filled parameters
 pub async fn restore_interactive(
     config: Config,
     host_opt: Option<String>,

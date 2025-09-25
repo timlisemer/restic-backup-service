@@ -4,13 +4,13 @@ use std::path::Path;
 use std::process::Command;
 use tracing::{error, info, warn};
 
-/// Validate credentials by testing basic S3 and restic connectivity
+// Test AWS credentials by attempting S3 bucket listing with AWS CLI
 pub async fn validate_credentials(config: &Config) -> Result<(), BackupServiceError> {
     info!("🔑 Validating credentials...");
 
-    // Test S3 connectivity by listing bucket root
     let s3_bucket = config.s3_bucket()?;
 
+    // Execute AWS CLI to test S3 access with configured credentials
     let output = Command::new("aws")
         .args([
             "s3",
@@ -32,18 +32,18 @@ pub async fn validate_credentials(config: &Config) -> Result<(), BackupServiceEr
         let stderr = String::from_utf8_lossy(&output.stderr);
         let error = BackupServiceError::from_stderr(&stderr, "credential validation");
 
-        // Use the Display implementation for consistent error messages
         error!(error = %error, "Credential validation failed");
 
         Err(error.with_validation_context())
     }
 }
 
-/// Show the size of a path in the repository
+// Calculate and display backup size for a specific path
 pub async fn show_size(config: Config, path: String) -> Result<(), BackupServiceError> {
     use crate::shared::commands::ResticCommandExecutor;
     use crate::shared::paths::PathMapper;
 
+    // Map native filesystem path to repository structure
     let native_path = Path::new(&path);
     let repo_subpath = PathMapper::path_to_repo_subpath(native_path)?;
     let repo_url = config.get_repo_url(&repo_subpath)?;
@@ -51,7 +51,6 @@ pub async fn show_size(config: Config, path: String) -> Result<(), BackupService
 
     info!(path = %path, "Checking size for path");
 
-    // Check if path exists in snapshots
     let snapshots = restic_cmd.snapshots(Some(&path)).await?;
 
     if snapshots.is_empty() {
@@ -59,7 +58,6 @@ pub async fn show_size(config: Config, path: String) -> Result<(), BackupService
         return Ok(());
     }
 
-    // Get stats for the path
     let total_size = restic_cmd.stats(&path).await?;
     let size_str = format_bytes(total_size)?;
     info!(path = %path, size = %size_str, "Path size calculated");
@@ -67,12 +65,13 @@ pub async fn show_size(config: Config, path: String) -> Result<(), BackupService
     Ok(())
 }
 
-/// Format bytes to human readable format
+// Convert raw bytes to human-readable format (B, KB, MB, GB, TB)
 pub fn format_bytes(bytes: u64) -> Result<String, BackupServiceError> {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
     let mut size = bytes as f64;
     let mut unit_index = 0;
 
+    // Convert to appropriate unit by dividing by 1024 until under threshold
     while size >= 1024.0 && unit_index < UNITS.len() - 1 {
         size /= 1024.0;
         unit_index += 1;
@@ -93,7 +92,6 @@ mod tests {
 
     #[test]
     fn test_format_bytes_basic_units() -> Result<(), BackupServiceError> {
-        // Test basic byte values
         assert_eq!(format_bytes(0)?, "0 B");
         assert_eq!(format_bytes(1)?, "1 B");
         assert_eq!(format_bytes(512)?, "512 B");
@@ -103,7 +101,6 @@ mod tests {
 
     #[test]
     fn test_format_bytes_kilobytes() -> Result<(), BackupServiceError> {
-        // Test KB values
         assert_eq!(format_bytes(1024)?, "1.00 KB");
         assert_eq!(format_bytes(1536)?, "1.50 KB");
         assert_eq!(format_bytes(2048)?, "2.00 KB");
@@ -113,7 +110,6 @@ mod tests {
 
     #[test]
     fn test_format_bytes_megabytes() -> Result<(), BackupServiceError> {
-        // Test MB values
         assert_eq!(format_bytes(1048576)?, "1.00 MB");
         assert_eq!(format_bytes(1572864)?, "1.50 MB");
         assert_eq!(format_bytes(10485760)?, "10.00 MB");

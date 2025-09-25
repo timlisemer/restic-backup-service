@@ -4,13 +4,13 @@ use crate::helpers::{RepositoryInfo, RepositoryScanner, SnapshotInfo};
 use crate::repository::BackupRepo;
 use crate::shared::commands::S3CommandExecutor;
 
-/// Comprehensive repository operations for data collection and management
+// High-level operations manager for repository scanning and data collection
 pub struct RepositoryOperations {
     config: Config,
     scanner: RepositoryScanner,
 }
 
-/// Combined repository data with snapshots
+// Combined repository information with snapshot data
 #[derive(Debug, Clone)]
 pub struct RepositoryData {
     pub info: RepositoryInfo,
@@ -28,22 +28,21 @@ impl RepositoryOperations {
         })
     }
 
-    /// Collect complete backup data for a hostname (used by restore and list operations)
+    // Main entrypoint to collect all repository data for a hostname
     pub async fn collect_backup_data(
         &self,
         hostname: &str,
     ) -> Result<Vec<RepositoryData>, BackupServiceError> {
-        // Scanning now includes parallel checking, so we just call scan_repositories
         self.scanner.scan_repositories(hostname).await
     }
 
-    /// Get available hosts from S3 bucket
+    // Retrieve available backup hosts from S3 storage
     pub async fn get_available_hosts(&self) -> Result<Vec<String>, BackupServiceError> {
         let s3_executor = S3CommandExecutor::new(self.config.clone())?;
         s3_executor.get_hosts().await
     }
 
-    /// Convert RepositoryData to BackupRepo format (for backward compatibility)
+    // Convert repository data to BackupRepo format
     pub fn convert_to_backup_repos(
         &self,
         repo_data: Vec<RepositoryData>,
@@ -58,7 +57,7 @@ impl RepositoryOperations {
         Ok(repos)
     }
 
-    /// Get all snapshots across all repositories for timeline view
+    // Flatten all snapshots from all repositories into a single collection
     pub fn extract_all_snapshots(&self, repo_data: &[RepositoryData]) -> Vec<SnapshotInfo> {
         repo_data
             .iter()
@@ -113,7 +112,6 @@ mod tests {
 
     #[test]
     fn test_convert_to_backup_repos_basic() -> Result<(), BackupServiceError> {
-        // Create a basic config for RepositoryOperations
         use crate::config::Config;
         use std::path::PathBuf;
 
@@ -130,7 +128,6 @@ mod tests {
 
         let ops = RepositoryOperations::new(config)?;
 
-        // Create test repository data
         let repo_data = vec![
             create_test_repo_data(
                 "/home/tim/.local/share/My Documents",
@@ -167,13 +164,10 @@ mod tests {
             ),
         ];
 
-        // Convert to BackupRepo format
         let backup_repos = ops.convert_to_backup_repos(repo_data)?;
 
-        // Verify conversion
         assert_eq!(backup_repos.len(), 3);
 
-        // Check first repo
         assert_eq!(
             backup_repos[0].native_path,
             PathBuf::from("/home/tim/.local/share/My Documents")
@@ -181,7 +175,6 @@ mod tests {
         assert_eq!(backup_repos[0].snapshot_count, 2);
         assert_eq!(backup_repos[0].category()?, "user_home");
 
-        // Check second repo
         assert_eq!(
             backup_repos[1].native_path,
             PathBuf::from("/mnt/docker-data/volumes/postgres backup")
@@ -189,7 +182,6 @@ mod tests {
         assert_eq!(backup_repos[1].snapshot_count, 1);
         assert_eq!(backup_repos[1].category()?, "docker_volume");
 
-        // Check third repo (no snapshots)
         assert_eq!(
             backup_repos[2].native_path,
             PathBuf::from("/etc/systemd/system/my service.service")
@@ -286,10 +278,8 @@ mod tests {
 
         let all_snapshots = ops.extract_all_snapshots(&repo_data);
 
-        // Should have 4 snapshots total (2 + 2 + 0)
         assert_eq!(all_snapshots.len(), 4);
 
-        // Check that all snapshots are present
         let snapshot_ids: Vec<&String> = all_snapshots.iter().map(|s| &s.id).collect();
         assert!(snapshot_ids.contains(&&"snap1".to_string()));
         assert!(snapshot_ids.contains(&&"snap2".to_string()));
@@ -316,12 +306,10 @@ mod tests {
 
         let ops = RepositoryOperations::new(config)?;
 
-        // Test with no repo data
         let empty_repo_data: Vec<RepositoryData> = vec![];
         let snapshots = ops.extract_all_snapshots(&empty_repo_data);
         assert!(snapshots.is_empty());
 
-        // Test with repo data but no snapshots
         let repo_data_no_snapshots = vec![
             create_test_repo_data(
                 "/etc/nginx",

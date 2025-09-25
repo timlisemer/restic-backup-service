@@ -15,7 +15,7 @@ A Rust-based CLI application for managing restic backups with S3 (Cloudflare R2)
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/restic-backup-service.git
+git clone https://github.com/timlisemer/restic-backup-service.git
 cd restic-backup-service
 
 # Build the application

@@ -6,14 +6,14 @@ use crate::utils::validate_credentials;
 use serde_json::json;
 use tracing::{info, warn};
 
+// CLI command to retrieve and display available backup hosts from S3
 pub async fn list_hosts(config: Config) -> Result<(), BackupServiceError> {
     info!("Getting available hosts...");
     config.set_aws_env()?;
 
-    // Validate credentials before trying to list hosts
+    // Validate AWS credentials before accessing S3
     validate_credentials(&config).await?;
 
-    // Use RepositoryOperations for unified host listing
     use crate::shared::operations::RepositoryOperations;
     let operations = RepositoryOperations::new(config)?;
     let hosts = operations.get_available_hosts().await?;
@@ -30,11 +30,13 @@ pub async fn list_hosts(config: Config) -> Result<(), BackupServiceError> {
     Ok(())
 }
 
+// Main CLI command to list backups with human-readable or JSON output
 pub async fn list_backups(
     config: Config,
     host: Option<String>,
     json_output: bool,
 ) -> Result<(), BackupServiceError> {
+    // Use provided hostname or fall back to config hostname
     let hostname = host.unwrap_or_else(|| config.hostname.clone());
     config.set_aws_env()?;
 
@@ -42,10 +44,9 @@ pub async fn list_backups(
         info!(hostname = %hostname, "Listing backups from S3 bucket");
     }
 
-    // Validate credentials before trying to list backups
     validate_credentials(&config).await?;
 
-    // Use RepositoryDataCollector for simplified data collection
+    // Collect and process repository data for display
     let (repos, all_snapshots) = {
         let operations = RepositoryOperations::new(config)?;
         let repo_data = operations.collect_backup_data(&hostname).await?;
@@ -56,7 +57,7 @@ pub async fn list_backups(
     };
 
     if json_output {
-        // Return JSON format for scripting
+        // Format output as structured JSON for scripting
         let output = json!({
             "host": hostname,
             "repositories": repos.iter().map(|r| json!({
@@ -72,7 +73,6 @@ pub async fn list_backups(
         });
         info!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        // Display formatted output using modular DisplayFormatter
         DisplayFormatter::display_backup_summary(&repos, &all_snapshots)?;
     }
 

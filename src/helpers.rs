@@ -12,11 +12,7 @@ use std::sync::{
 };
 use tracing::info;
 
-// ============================================================================
-
-// ============================================================================
-// RepositoryScanner - Unified S3 directory scanning and nested repo detection
-// ============================================================================
+// RepositoryScanner - S3 directory scanning with parallel repository checking
 
 pub struct RepositoryScanner {
     config: Config,
@@ -32,7 +28,7 @@ impl RepositoryScanner {
         })
     }
 
-    /// Construct S3 path without double slashes
+    // Construct S3 path with optional base path prefix
     fn build_s3_path(&self, hostname: &str, category: &str) -> Result<String, BackupServiceError> {
         let base_path = self.config.s3_base_path()?;
         if base_path.is_empty() {
@@ -42,7 +38,7 @@ impl RepositoryScanner {
         }
     }
 
-    /// List S3 directories with proper error handling
+    // Execute AWS CLI to list S3 directories and parse output
     pub async fn list_s3_dirs(&self, s3_path: &str) -> Result<Vec<String>, BackupServiceError> {
         let s3_bucket = self.config.s3_bucket()?;
         let full_path = format!("s3://{}/{}/", s3_bucket, s3_path);
@@ -65,11 +61,12 @@ impl RepositoryScanner {
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
+            // Parse S3 directory listing - critical: preserve spaces in directory names
             let dirs: Vec<String> = stdout
                 .lines()
                 .filter(|line| line.contains("PRE"))
                 .map(|line| {
-                    // Extract directory name after "PRE " prefix, preserving spaces
+                    // Preserve spaces after "PRE " prefix in S3 output
                     if let Some(start) = line.find("PRE ") {
                         let dir_name = &line[start + 4..]; // Skip "PRE "
                         dir_name.trim_end_matches('/').to_string()
@@ -91,7 +88,6 @@ impl RepositoryScanner {
         &self,
         hostname: &str,
     ) -> Result<Vec<RepositoryData>, BackupServiceError> {
-        // First, discover all repositories across all categories
         let all_repo_infos = self.discover_all_repositories(hostname).await?;
         let total_repos = all_repo_infos.len();
         let counter = Arc::new(AtomicUsize::new(0));
@@ -103,13 +99,14 @@ impl RepositoryScanner {
 
         info!("Found {} repositories to check", total_repos);
 
-        // Spawn actual Tokio tasks for TRUE parallel execution
+        // Parallel execution: spawn concurrent tasks for repository checking
         let mut tasks = Vec::new();
 
         for repo_info in all_repo_infos {
             let snapshot_collector = self.snapshot_collector.clone();
             let counter_clone = counter.clone();
 
+            // Each repository is checked concurrently using tokio::spawn
             let task = tokio::spawn(async move {
                 let current = counter_clone.fetch_add(1, Ordering::SeqCst) + 1;
                 let native_path = &repo_info.native_path;
@@ -144,7 +141,6 @@ impl RepositoryScanner {
             tasks.push(task);
         }
 
-        // Wait for all tasks to complete
         let mut results = Vec::new();
         for task in tasks {
             match task.await {
@@ -163,26 +159,22 @@ impl RepositoryScanner {
         Ok(repos)
     }
 
-    /// Discover all repositories across all categories without checking snapshots
     async fn discover_all_repositories(
         &self,
         hostname: &str,
     ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
         let mut all_repos = Vec::new();
 
-        // Discover user home repositories
         all_repos.extend(self.discover_user_home_repositories(hostname).await?);
 
-        // Discover docker volume repositories
         all_repos.extend(self.discover_docker_volume_repositories(hostname).await?);
 
-        // Discover system repositories
         all_repos.extend(self.discover_system_repositories(hostname).await?);
 
         Ok(all_repos)
     }
 
-    /// Discover repositories for a specific category
+    // Unified repository discovery for different categories (user_home/docker_volume/system)
     async fn discover_repositories_by_category(
         &self,
         hostname: &str,
@@ -193,9 +185,9 @@ impl RepositoryScanner {
 
         info!("Scanning {} directories...", category);
 
+        // Category-specific path mapping from S3 structure to native filesystem paths
         match category {
             "user_home" => {
-                // User home has nested structure: users -> subdirs
                 if let Ok(users) = self.list_s3_dirs(&category_path).await {
                     for user in users {
                         info!("Processing user: {}", user);
@@ -219,7 +211,6 @@ impl RepositoryScanner {
                 }
             }
             "docker_volume" => {
-                // Docker volumes have flat structure
                 if let Ok(volumes) = self.list_s3_dirs(&category_path).await {
                     for volume in volumes {
                         let native_path =
@@ -235,7 +226,6 @@ impl RepositoryScanner {
                 }
             }
             "system" => {
-                // System paths have flat structure with path mapping
                 if let Ok(paths) = self.list_s3_dirs(&category_path).await {
                     for path in paths {
                         let native_path_str = PathMapper::s3_to_native_path(&path)?;
@@ -261,7 +251,6 @@ impl RepositoryScanner {
         Ok(repos)
     }
 
-    /// Discover user home repositories without checking snapshots
     async fn discover_user_home_repositories(
         &self,
         hostname: &str,
@@ -270,7 +259,6 @@ impl RepositoryScanner {
             .await
     }
 
-    /// Discover docker volume repositories without checking snapshots
     async fn discover_docker_volume_repositories(
         &self,
         hostname: &str,
@@ -279,7 +267,6 @@ impl RepositoryScanner {
             .await
     }
 
-    /// Discover system repositories without checking snapshots
     async fn discover_system_repositories(
         &self,
         hostname: &str,
@@ -289,10 +276,8 @@ impl RepositoryScanner {
     }
 }
 
-// ============================================================================
-// SnapshotCollector - Unified snapshot gathering
-// ============================================================================
 
+// Collects snapshot data from restic repositories
 #[derive(Clone)]
 pub struct SnapshotCollector {
     config: Config,
@@ -303,7 +288,7 @@ impl SnapshotCollector {
         Ok(Self { config })
     }
 
-    /// Get snapshots for a repository with count
+    // Retrieve and parse snapshot information from restic repository
     pub async fn get_snapshots(
         &self,
         repo_subpath: &str,
@@ -317,6 +302,7 @@ impl SnapshotCollector {
             .await?;
         let count = snapshots.len();
 
+        // Parse JSON snapshot data into structured format
         let snapshot_infos: Vec<SnapshotInfo> = snapshots
             .into_iter()
             .filter_map(|s| {
@@ -334,9 +320,6 @@ impl SnapshotCollector {
     }
 }
 
-// ============================================================================
-// Data Structures
-// ============================================================================
 
 #[derive(Debug, Clone)]
 pub struct RepositoryInfo {
@@ -346,7 +329,6 @@ pub struct RepositoryInfo {
 }
 
 impl RepositoryInfo {
-    // Future helper methods can be added here
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -381,7 +363,6 @@ mod tests {
 
     #[test]
     fn test_repository_info_various_categories() {
-        // Test different category types
         let test_cases = vec![
             (
                 "/home/alice/projects",
@@ -455,8 +436,8 @@ mod tests {
             id: "snap123".to_string(),
         };
 
-        assert_eq!(snapshot1, snapshot2); // Should be equal
-        assert_ne!(snapshot1, snapshot3); // Should not be equal
+        assert_eq!(snapshot1, snapshot2);
+        assert_ne!(snapshot1, snapshot3);
     }
 
     #[test]
@@ -522,7 +503,6 @@ mod tests {
 
     #[test]
     fn test_complex_path_handling() {
-        // Test complex paths with spaces, unicode, and special characters
         let test_cases = vec![
             // Original cases
             "/home/user with spaces/documents",
@@ -533,31 +513,23 @@ mod tests {
             "/usr/local/bin/custom-script",
             "/opt/software/version-1.2.3",
             "/home/user123/Downloads/file.tar.gz",
-            // Comprehensive whitespace scenarios
-            // Gaming directories
             "/home/gamer/.local/share/Paradox Interactive",
             "/home/user/.steam/steam/steamapps/common/Grand Theft Auto V",
             "/home/player/Games/World of Warcraft/Interface/AddOns",
-            // Application directories
             "/home/user/.config/Google Chrome",
             "/home/developer/.local/share/JetBrains Toolbox",
             "/home/designer/Adobe After Effects 2024",
-            // Document and media folders
             "/home/user/Documents/Important Business Files",
             "/home/user/Music/Classical Music Collection",
             "/home/user/Videos/Home Movies 2024",
-            // Docker volumes with spaces
             "/mnt/docker-data/volumes/my app data",
             "/mnt/docker-data/volumes/web server config",
             "/mnt/docker-data/volumes/database backup files",
-            // System paths with spaces
             "/usr/share/applications/Visual Studio Code",
             "/opt/Google Chrome",
             "/var/log/system events",
-            // Edge cases with multiple spaces
             "/home/user/My    Project    Files",
             "/home/user/App  With  Multiple  Spaces",
-            // Leading and trailing spaces
             "/home/user/ leading space",
             "/home/user/trailing space ",
             "/home/user/ both spaces ",
@@ -591,7 +563,6 @@ mod tests {
             .with_timezone(&Utc);
         let path = PathBuf::from("/home/tim/docs");
 
-        // Test various ID formats
         let id_formats = vec![
             "abc123def456",                             // Standard hex
             "12345678",                                 // Numbers only
@@ -624,7 +595,6 @@ mod tests {
             "my_volume",
             "volume123",
             "complex-name-with-dashes",
-            // Whitespace docker volume names
             "my app data",
             "web server config",
             "database backup files",
@@ -726,10 +696,8 @@ mod tests {
 
     #[test]
     fn test_s3_path_construction_no_double_slash() -> Result<(), BackupServiceError> {
-        // Test that S3 path construction doesn't create double slashes
         use crate::config::Config;
 
-        // Test with empty base path (common case)
         let config_empty_base = Config {
             restic_password: "test".to_string(),
             restic_repo_base: "s3:https://example.com/bucket".to_string(), // Empty base path
@@ -752,7 +720,6 @@ mod tests {
         );
         assert_eq!(scanner.build_s3_path("tim-pc", "system")?, "tim-pc/system");
 
-        // Test with non-empty base path
         let config_with_base = Config {
             restic_password: "test".to_string(),
             restic_repo_base: "s3:https://example.com/bucket/restic".to_string(), // Non-empty base path
@@ -778,7 +745,6 @@ mod tests {
             "restic/tim-pc/system"
         );
 
-        // Test various hostname formats
         assert_eq!(
             scanner.build_s3_path("host-with-dashes", "user_home")?,
             "host-with-dashes/user_home"
@@ -793,10 +759,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3_directory_listing_parsing_with_spaces() {
-        // CRITICAL: Test that would have caught the whitespace parsing bug
+        // Critical test: ensure S3 parsing preserves spaces (fixed previous bug)
 
-        // Mock AWS S3 ls output with directories containing spaces
-        // This is the exact format that AWS CLI returns
         let mock_s3_output = r#"                           PRE .arduinoIDE/
                            PRE .bash_history/
                            PRE .config/
@@ -808,12 +772,11 @@ mod tests {
                            PRE Photo Collection 2024/
 "#;
 
-        // Parse the output manually to test our parsing logic
         let parsed_dirs: Vec<String> = mock_s3_output
             .lines()
             .filter(|line| line.contains("PRE"))
             .map(|line| {
-                // This is the FIXED parsing logic that should preserve spaces
+                // Fixed parsing: preserve spaces after "PRE " prefix
                 if let Some(start) = line.find("PRE ") {
                     let dir_name = &line[start + 4..]; // Skip "PRE "
                     dir_name.trim_end_matches('/').to_string()
@@ -824,7 +787,6 @@ mod tests {
             .filter(|d| !d.is_empty())
             .collect();
 
-        // Verify that directories with spaces are preserved correctly
         assert!(
             parsed_dirs.contains(&".local_share_Paradox Interactive_".to_string()),
             "Failed to preserve spaces in '.local_share_Paradox Interactive_'"
@@ -843,12 +805,10 @@ mod tests {
             "Failed to preserve spaces in 'Photo Collection 2024'"
         );
 
-        // Test that the OLD BUGGY parsing would have failed
         let buggy_parsed_dirs: Vec<String> = mock_s3_output
             .lines()
             .filter(|line| line.contains("PRE"))
             .map(|line| {
-                // This is the OLD BUGGY parsing logic
                 line.split_whitespace()
                     .last()
                     .unwrap_or("")
@@ -858,7 +818,6 @@ mod tests {
             .filter(|d| !d.is_empty())
             .collect();
 
-        // Demonstrate that the buggy parsing would have truncated directory names
         assert!(
             buggy_parsed_dirs.contains(&"Interactive_".to_string()),
             "Buggy parsing should truncate to 'Interactive_'"
@@ -872,7 +831,6 @@ mod tests {
             "Buggy parsing should truncate Grand Theft Auto V to just 'V'"
         );
 
-        // Ensure we have the expected count of directories
         assert_eq!(
             parsed_dirs.len(),
             9,
@@ -882,10 +840,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3_command_executor_parsing_with_spaces() {
-        // Test the S3CommandExecutor parsing logic specifically
 
-        // Mock S3 output for testing the parsing logic in isolation
-        // This tests the parse_s3_directories helper logic
         let mock_output = r#"                           PRE application logs/
                            PRE database backup files/
                            PRE user data/
@@ -897,7 +852,6 @@ mod tests {
             .lines()
             .filter(|line| line.contains("PRE"))
             .map(|line| {
-                // Test the FIXED parsing logic
                 if let Some(start) = line.find("PRE ") {
                     let dir_name = &line[start + 4..];
                     dir_name.trim_end_matches('/').to_string()
@@ -908,7 +862,6 @@ mod tests {
             .filter(|d| !d.is_empty())
             .collect();
 
-        // Verify correct parsing of directories with spaces
         assert_eq!(parsed.len(), 5);
         assert!(parsed.contains(&"application logs".to_string()));
         assert!(parsed.contains(&"database backup files".to_string()));
@@ -919,15 +872,10 @@ mod tests {
 
     #[test]
     fn test_s3_parsing_edge_cases() {
-        // Test edge cases that could break S3 parsing
         let edge_case_outputs = vec![
-            // Multiple spaces in directory names
             r#"                           PRE Directory  With  Multiple  Spaces/"#,
-            // Leading and trailing spaces
             r#"                           PRE  Leading And Trailing  /"#,
-            // Special characters with spaces
             r#"                           PRE My-App Config Files/"#,
-            // Very long directory names with spaces
             r#"                           PRE This Is A Very Long Directory Name With Many Words And Spaces/"#,
         ];
 

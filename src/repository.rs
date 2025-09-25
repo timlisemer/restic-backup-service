@@ -1,7 +1,7 @@
 use crate::errors::BackupServiceError;
 use std::path::PathBuf;
 
-/// Information about a backup repository
+// Represents a backup repository with its native filesystem path and snapshot count
 #[derive(Debug, Clone)]
 pub struct BackupRepo {
     pub native_path: PathBuf,
@@ -16,21 +16,22 @@ impl BackupRepo {
         })
     }
 
+    // Builder pattern method to set snapshot count after discovery
     pub fn with_count(mut self, count: usize) -> Result<Self, BackupServiceError> {
         self.snapshot_count = count;
         Ok(self)
     }
 
+    // Categorize repository path for backup organization (user_home/docker_volume/system)
     pub fn category(&self) -> Result<&'static str, BackupServiceError> {
         let path_str = self.native_path.to_string_lossy();
 
+        // Path categorization logic - drives backup organization structure
         let result = if path_str.starts_with("/home/") && path_str != "/home/" {
-            // Ensure it's actually a user path, not just /home or /home/
             "user_home"
         } else if path_str.starts_with("/mnt/docker-data/volumes/")
             && path_str != "/mnt/docker-data/volumes/"
         {
-            // Ensure it's actually a volume, not just the volumes directory
             "docker_volume"
         } else {
             "system"
@@ -46,7 +47,6 @@ mod tests {
 
     #[test]
     fn test_backup_repo_creation() -> Result<(), BackupServiceError> {
-        // Test basic creation
         let path = PathBuf::from("/home/tim/documents");
         let repo = BackupRepo::new(path.clone())?;
 
@@ -58,14 +58,12 @@ mod tests {
 
     #[test]
     fn test_backup_repo_with_count() -> Result<(), BackupServiceError> {
-        // Test builder pattern with count
         let path = PathBuf::from("/home/tim/projects");
         let repo = BackupRepo::new(path.clone())?.with_count(42)?;
 
         assert_eq!(repo.native_path, path);
         assert_eq!(repo.snapshot_count, 42);
 
-        // Test chaining multiple operations
         let repo2 = BackupRepo::new(PathBuf::from("/tmp/test"))?.with_count(0)?;
         assert_eq!(repo2.snapshot_count, 0);
 
@@ -77,7 +75,6 @@ mod tests {
 
     #[test]
     fn test_category_detection_user_home() -> Result<(), BackupServiceError> {
-        // Test various user home paths
         let test_cases = vec![
             "/home/tim",
             "/home/tim/",
@@ -87,7 +84,6 @@ mod tests {
             "/home/user123/data",
             "/home/user-name/files",
 
-            // Whitespace path scenarios
             "/home/user/.local/share/Paradox Interactive",
             "/home/gamer/Documents/My Games",
             "/home/user/Software Installation Files",
@@ -99,7 +95,6 @@ mod tests {
             "/home/gamer/.local/share/Steam Games",
             "/home/user/Videos/Home Movies Collection",
 
-            // NixOS-style paths (similar to user configuration)
             "/home/developer/Coding",
             "/home/user/Desktop",
             "/home/alice/.mozilla",
@@ -125,7 +120,6 @@ mod tests {
 
     #[test]
     fn test_category_detection_docker_volume() -> Result<(), BackupServiceError> {
-        // Test various docker volume paths
         let test_cases = vec![
             "/mnt/docker-data/volumes/myapp",
             "/mnt/docker-data/volumes/myapp/",
@@ -134,7 +128,6 @@ mod tests {
             "/mnt/docker-data/volumes/redis_cache",
             "/mnt/docker-data/volumes/app-volume/nested/path",
             "/mnt/docker-data/volumes/complex-name-123",
-            // Whitespace docker volume scenarios
             "/mnt/docker-data/volumes/my app data",
             "/mnt/docker-data/volumes/game server config",
             "/mnt/docker-data/volumes/web app storage",
@@ -162,7 +155,6 @@ mod tests {
 
     #[test]
     fn test_category_detection_system() -> Result<(), BackupServiceError> {
-        // Test various system paths
         let test_cases = vec![
             "/",
             "/etc",
@@ -175,7 +167,6 @@ mod tests {
             "/root/.config",
             "/tmp/backup",
             "/srv/www",
-            // Whitespace system path scenarios
             "/usr/share/applications/My Application",
             "/opt/Google Chrome",
             "/var/log/system events",
@@ -200,9 +191,7 @@ mod tests {
 
     #[test]
     fn test_category_edge_cases() -> Result<(), BackupServiceError> {
-        // Test edge cases and boundary conditions
 
-        // Test edge cases with corrected logic
         let repo1 = BackupRepo::new(PathBuf::from("/home"))?; // Just /home, not a user directory
         assert_eq!(repo1.category()?, "system"); // Should be system, not user_home
 
@@ -215,7 +204,6 @@ mod tests {
         let repo4 = BackupRepo::new(PathBuf::from("/my/home/dir"))?; // home in middle
         assert_eq!(repo4.category()?, "system");
 
-        // Paths that look like docker volumes but aren't
         let repo5 = BackupRepo::new(PathBuf::from("/mnt/docker-data"))?; // Too short
         assert_eq!(repo5.category()?, "system");
 
@@ -233,7 +221,6 @@ mod tests {
 
     #[test]
     fn test_category_with_relative_and_special_paths() -> Result<(), BackupServiceError> {
-        // Test relative and special paths (all should be system)
         let test_cases = vec![
             "relative/path",
             "./relative/path",
@@ -252,9 +239,7 @@ mod tests {
 
     #[test]
     fn test_category_detection_whitespace_edge_cases() -> Result<(), BackupServiceError> {
-        // Test edge cases with whitespace paths
         let edge_cases = vec![
-            // Paths with multiple spaces
             ("/home/user/My    Project    Files", "user_home"),
             (
                 "/mnt/docker-data/volumes/app  with  spaces",

@@ -17,9 +17,10 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Result<Self, BackupServiceError> {
+        // Load environment variables from .env file if present
         dotenv::dotenv().ok();
 
-        // Manually read RESTIC_PASSWORD to avoid dotenv variable substitution issues
+        // Avoid dotenv variable substitution issues - try .env file first, then env var
         let restic_password =
             Self::read_password_from_env_file().or_else(|_| env::var("RESTIC_PASSWORD"))?;
         let restic_repo_base = env::var("RESTIC_REPO_BASE")?;
@@ -31,7 +32,6 @@ impl Config {
 
         let aws_s3_endpoint = env::var("AWS_S3_ENDPOINT")?;
 
-        // Parse backup paths from comma-separated list
         let backup_paths = env::var("BACKUP_PATHS")
             .unwrap_or_default()
             .split(',')
@@ -39,7 +39,7 @@ impl Config {
             .map(|s| PathBuf::from(s.trim()))
             .collect();
 
-        // Get hostname from env or system
+        // Hostname fallback: env var -> system hostname -> "unknown"
         let hostname = env::var("BACKUP_HOSTNAME").unwrap_or_else(|_| {
             hostname::get()
                 .map(|h| h.to_string_lossy().to_string())
@@ -58,10 +58,9 @@ impl Config {
         })
     }
 
-    /// Get S3 endpoint URL from repo base
     pub fn s3_endpoint(&self) -> Result<String, BackupServiceError> {
+        // Parse endpoint from s3:https://domain.com/bucket/path format
         if let Some(endpoint) = self.restic_repo_base.strip_prefix("s3:") {
-            // Find the first '/' after the protocol (after "://")
             if let Some(protocol_end) = endpoint.find("://") {
                 let after_protocol = &endpoint[protocol_end + 3..];
                 if let Some(path_start) = after_protocol.find('/') {
@@ -72,10 +71,9 @@ impl Config {
         Ok(self.aws_s3_endpoint.clone())
     }
 
-    /// Get S3 bucket name from repo base
     pub fn s3_bucket(&self) -> Result<String, BackupServiceError> {
+        // Extract bucket name from s3:https://domain.com/bucket/path
         if let Some(s3_path) = self.restic_repo_base.strip_prefix("s3:") {
-            // Remove protocol and extract bucket
             if let Some(path_start) = s3_path.find("//") {
                 let path = &s3_path[path_start + 2..];
                 if let Some(slash_pos) = path.find('/') {
@@ -93,7 +91,6 @@ impl Config {
         )))
     }
 
-    /// Get the base path within the bucket (after bucket name)
     pub fn s3_base_path(&self) -> Result<String, BackupServiceError> {
         if let Some(s3_path) = self.restic_repo_base.strip_prefix("s3:") {
             if let Some(path_start) = s3_path.find("//") {
@@ -109,7 +106,7 @@ impl Config {
         Ok(String::new())
     }
 
-    /// Set AWS environment variables for restic
+    // Set environment variables for AWS SDK/CLI usage
     pub fn set_aws_env(&self) -> Result<(), BackupServiceError> {
         env::set_var("AWS_ACCESS_KEY_ID", &self.aws_access_key_id);
         env::set_var("AWS_SECRET_ACCESS_KEY", &self.aws_secret_access_key);
@@ -118,7 +115,7 @@ impl Config {
         Ok(())
     }
 
-    /// Get full repository URL for a specific path
+    // Construct final restic repository URL with hostname and subpath
     pub fn get_repo_url(&self, subpath: &str) -> Result<String, BackupServiceError> {
         Ok(format!(
             "{}/{}/{}",
@@ -126,7 +123,7 @@ impl Config {
         ))
     }
 
-    /// Read RESTIC_PASSWORD directly from .env file without variable substitution
+    // Manual .env parsing to avoid dotenv variable substitution issues
     fn read_password_from_env_file() -> Result<String, BackupServiceError> {
         use std::fs::File;
         use std::io::{BufRead, BufReader};
@@ -142,17 +139,15 @@ impl Config {
                 BackupServiceError::ConfigurationError("Cannot read .env file".to_string())
             })?;
 
-            // Skip empty lines and comments
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
 
-            // Look for RESTIC_PASSWORD line
             if let Some((key, value)) = line.split_once('=') {
                 if key.trim() == "RESTIC_PASSWORD" {
                     let password = value.trim();
-                    // Remove surrounding quotes if present
+                    // Remove quotes if present
                     let password = if (password.starts_with('"') && password.ends_with('"'))
                         || (password.starts_with('\'') && password.ends_with('\''))
                     {
@@ -190,7 +185,6 @@ mod tests {
 
     #[test]
     fn test_s3_endpoint_extraction() -> Result<(), BackupServiceError> {
-        // Test standard S3 URL format
         let config = create_test_config("s3:https://bucket.s3.amazonaws.com/restic");
         assert_eq!(config.s3_endpoint()?, "https://bucket.s3.amazonaws.com");
 
@@ -202,7 +196,6 @@ mod tests {
             "https://abc123.r2.cloudflarestorage.com"
         );
 
-        // Test custom endpoint
         let config = create_test_config("s3:https://minio.example.com/bucket");
         assert_eq!(config.s3_endpoint()?, "https://minio.example.com");
 
@@ -210,11 +203,9 @@ mod tests {
         let config = create_test_config("s3:http://localhost:9000/bucket");
         assert_eq!(config.s3_endpoint()?, "http://localhost:9000");
 
-        // Test fallback when no s3: prefix
         let config = create_test_config("invalid_format");
         assert_eq!(config.s3_endpoint()?, "https://fallback.example.com");
 
-        // Test fallback when no protocol or slash
         let config = create_test_config("s3:https-no-slashes");
         assert_eq!(config.s3_endpoint()?, "https://fallback.example.com");
 
@@ -223,7 +214,6 @@ mod tests {
 
     #[test]
     fn test_s3_bucket_extraction() -> Result<(), BackupServiceError> {
-        // Test standard format with path
         let config = create_test_config("s3:https://s3.amazonaws.com/my-bucket/restic");
         assert_eq!(config.s3_bucket()?, "my-bucket");
 
@@ -231,7 +221,6 @@ mod tests {
         let config = create_test_config("s3:https://s3.amazonaws.com/my-bucket");
         assert_eq!(config.s3_bucket()?, "my-bucket");
 
-        // Test with nested path
         let config = create_test_config("s3:https://minio.example.com/my-bucket/deep/path");
         assert_eq!(config.s3_bucket()?, "my-bucket");
 
@@ -240,7 +229,6 @@ mod tests {
             create_test_config("s3:https://abc123.r2.cloudflarestorage.com/bucket-name/restic");
         assert_eq!(config.s3_bucket()?, "bucket-name");
 
-        // Test bucket with hyphens and numbers
         let config = create_test_config("s3:https://s3.amazonaws.com/my-bucket-123/path");
         assert_eq!(config.s3_bucket()?, "my-bucket-123");
 
@@ -249,7 +237,6 @@ mod tests {
 
     #[test]
     fn test_s3_bucket_extraction_errors() {
-        // Test invalid formats that should return errors
         let config = create_test_config("invalid_format");
         assert!(config.s3_bucket().is_err());
 
@@ -262,11 +249,9 @@ mod tests {
 
     #[test]
     fn test_s3_base_path_extraction() -> Result<(), BackupServiceError> {
-        // Test with base path
         let config = create_test_config("s3:https://s3.amazonaws.com/my-bucket/restic");
         assert_eq!(config.s3_base_path()?, "restic");
 
-        // Test with nested base path
         let config = create_test_config("s3:https://s3.amazonaws.com/my-bucket/path/to/restic");
         assert_eq!(config.s3_base_path()?, "path/to/restic");
 
@@ -274,11 +259,9 @@ mod tests {
         let config = create_test_config("s3:https://s3.amazonaws.com/my-bucket");
         assert_eq!(config.s3_base_path()?, "");
 
-        // Test empty base path
         let config = create_test_config("s3:https://s3.amazonaws.com/my-bucket/");
         assert_eq!(config.s3_base_path()?, "");
 
-        // Test invalid format returns empty
         let config = create_test_config("invalid_format");
         assert_eq!(config.s3_base_path()?, "");
 
@@ -289,25 +272,21 @@ mod tests {
     fn test_get_repo_url_construction() -> Result<(), BackupServiceError> {
         let config = create_test_config("s3:https://s3.amazonaws.com/my-bucket/restic");
 
-        // Test basic URL construction
         assert_eq!(
             config.get_repo_url("user_home/tim/documents")?,
             "s3:https://s3.amazonaws.com/my-bucket/restic/test-host/user_home/tim/documents"
         );
 
-        // Test docker volume path
         assert_eq!(
             config.get_repo_url("docker_volume/myapp")?,
             "s3:https://s3.amazonaws.com/my-bucket/restic/test-host/docker_volume/myapp"
         );
 
-        // Test system path
         assert_eq!(
             config.get_repo_url("system/etc_nginx")?,
             "s3:https://s3.amazonaws.com/my-bucket/restic/test-host/system/etc_nginx"
         );
 
-        // Test empty subpath
         assert_eq!(
             config.get_repo_url("")?,
             "s3:https://s3.amazonaws.com/my-bucket/restic/test-host/"
@@ -341,13 +320,11 @@ mod tests {
     fn test_get_repo_url_whitespace_edge_cases() -> Result<(), BackupServiceError> {
         let config = create_test_config("s3:https://s3.amazonaws.com/my-bucket/restic");
 
-        // Test paths with multiple spaces
         assert_eq!(
             config.get_repo_url("user_home/user/My   Project   Files")?,
             "s3:https://s3.amazonaws.com/my-bucket/restic/test-host/user_home/user/My   Project   Files"
         );
 
-        // Test paths with leading/trailing spaces
         assert_eq!(
             config.get_repo_url("user_home/user/ leading space")?,
             "s3:https://s3.amazonaws.com/my-bucket/restic/test-host/user_home/user/ leading space"

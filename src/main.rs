@@ -21,13 +21,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run backup for configured paths
     Run {
         /// Optional specific paths to backup (otherwise uses config)
         #[arg(value_delimiter = ',')]
         paths: Vec<String>,
     },
-    /// List all available backups
     List {
         /// Hostname to list backups for (default: current host)
         #[arg(short = 'H', long)]
@@ -36,7 +34,6 @@ enum Commands {
         #[arg(short, long)]
         json: bool,
     },
-    /// Interactively restore backups
     Restore {
         /// Non-interactive mode with specific options
         #[arg(short = 'H', long)]
@@ -46,14 +43,10 @@ enum Commands {
         #[arg(short, long)]
         timestamp: Option<String>,
     },
-    /// Show repository size for a given path
     Size {
-        /// Path to check size for
         path: String,
     },
-    /// List available hosts in the repository
     Hosts,
-    /// Generate sample .env file
     Init,
 }
 
@@ -74,7 +67,7 @@ fn init_logging() -> Result<(), crate::errors::BackupServiceError> {
         .with_env_filter(env_filter)
         .init();
 
-    // Keep the guard alive
+    // Keep tracing guard alive for entire program lifetime
     std::mem::forget(_guard);
 
     Ok(())
@@ -82,7 +75,7 @@ fn init_logging() -> Result<(), crate::errors::BackupServiceError> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging first
+    // Initialize tracing logging
     init_logging()?;
 
     let cli = Cli::parse();
@@ -93,6 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => Some(config::Config::load()?),
     };
 
+    // Dispatch CLI commands to their respective handlers
     match cli.command {
         Commands::Run { paths } => {
             backup::run_backup(config.unwrap(), paths).await?;
@@ -121,6 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+// Create sample .env file with configuration template for first-time setup
 fn init_env_file() -> Result<(), crate::errors::BackupServiceError> {
     use std::fs;
     use std::path::Path;
