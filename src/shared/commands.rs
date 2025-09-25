@@ -140,7 +140,12 @@ impl ResticCommandExecutor {
         if !self.repo_exists().await? {
             info!(repo_url = %self.repo_url, "Initializing repository");
             self.executor
-                .execute_restic_command(&self.repo_url, &["init"], "repository initialization", false)
+                .execute_restic_command(
+                    &self.repo_url,
+                    &["init"],
+                    "repository initialization",
+                    false,
+                )
                 .await?;
             info!("Repository initialized");
         }
@@ -153,7 +158,12 @@ impl ResticCommandExecutor {
     }
 
     /// Run backup with exact parameters
-    pub async fn backup(&self, path: &Path, hostname: &str) -> Result<String, BackupServiceError> {
+    pub async fn backup(
+        &self,
+        path: &Path,
+        hostname: &str,
+        show_live_output: bool,
+    ) -> Result<String, BackupServiceError> {
         let path_str = path.to_string_lossy();
         let tag = determine_backup_tag(path)?;
 
@@ -162,7 +172,7 @@ impl ResticCommandExecutor {
                 &self.repo_url,
                 &["backup", &path_str, "--host", hostname, "--tag", tag],
                 &format!("backup {}", path_str),
-                false,
+                show_live_output,
             )
             .await
     }

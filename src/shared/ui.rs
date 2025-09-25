@@ -2,7 +2,6 @@ use crate::errors::BackupServiceError;
 use crate::shared::operations::RepositorySelectionItem;
 use chrono::{DateTime, Duration, Utc};
 use dialoguer::{Confirm, MultiSelect, Select};
-use indicatif::{ProgressBar, ProgressStyle};
 use tracing::info;
 
 /// Handle category-based repository selection
@@ -115,6 +114,7 @@ pub async fn select_repositories(
         let selection = Select::new()
             .with_prompt("Select what to restore")
             .items(&categories)
+            .default(0)
             .interact()?;
 
         match selection {
@@ -147,6 +147,7 @@ pub async fn select_repositories(
                 let selection = Select::new()
                     .with_prompt("Select repository")
                     .items(&items)
+                    .default(0)
                     .interact()?;
 
                 vec![backup_data[selection].clone()]
@@ -232,17 +233,6 @@ pub async fn select_timestamp(
     };
 
     Ok(TimestampSelection { selected_timestamp })
-}
-
-/// Create and configure progress bar for backup operations
-pub fn create_backup_progress_bar(total: usize) -> Result<ProgressBar, BackupServiceError> {
-    let pb = ProgressBar::new(total as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")?
-            .progress_chars("#>-"),
-    );
-    Ok(pb)
 }
 
 /// Simple confirmation dialog
@@ -560,23 +550,6 @@ mod tests {
             .filter(|t| **t >= window3 && **t < window3_end)
             .count();
         assert_eq!(count3, 1); // snap4
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_create_backup_progress_bar() -> Result<(), BackupServiceError> {
-        // Test progress bar creation
-        let pb = create_backup_progress_bar(100)?;
-        assert_eq!(pb.length(), Some(100));
-
-        // Test with zero items
-        let pb_zero = create_backup_progress_bar(0)?;
-        assert_eq!(pb_zero.length(), Some(0));
-
-        // Test with large number
-        let pb_large = create_backup_progress_bar(999999)?;
-        assert_eq!(pb_large.length(), Some(999999));
 
         Ok(())
     }

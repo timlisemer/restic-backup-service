@@ -80,7 +80,9 @@ impl BackupServiceError {
             || stderr_lower.contains("dns")
         {
             BackupServiceError::NetworkError
-        } else if stderr_lower.contains("repository") && stderr_lower.contains("not found") {
+        } else if (stderr_lower.contains("repository") && stderr_lower.contains("not found"))
+            || stderr_lower.contains("repository does not exist")
+            || stderr_lower.contains("unable to open config file") {
             BackupServiceError::RepositoryNotFound(context.to_string())
         } else {
             BackupServiceError::CommandFailed(stderr.to_string())
@@ -106,6 +108,16 @@ mod tests {
 
         assert!(matches!(
             BackupServiceError::from_stderr("repository not found", "test"),
+            BackupServiceError::RepositoryNotFound(_)
+        ));
+
+        assert!(matches!(
+            BackupServiceError::from_stderr("Fatal: repository does not exist: unable to open config file", "test"),
+            BackupServiceError::RepositoryNotFound(_)
+        ));
+
+        assert!(matches!(
+            BackupServiceError::from_stderr("unable to open config file: Stat: The specified key does not exist", "test"),
             BackupServiceError::RepositoryNotFound(_)
         ));
 

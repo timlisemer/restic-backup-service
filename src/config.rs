@@ -36,7 +36,7 @@ impl Config {
             .unwrap_or_default()
             .split(',')
             .filter(|s| !s.is_empty())
-            .map(|s| PathBuf::from(s.trim()))
+            .map(|s| PathBuf::from(s.trim().trim_end_matches('/')))
             .collect();
 
         // Hostname fallback: env var -> system hostname -> "unknown"
@@ -416,7 +416,7 @@ mod tests {
             .unwrap_or_default()
             .split(',')
             .filter(|s| !s.is_empty())
-            .map(|s| PathBuf::from(s.trim()))
+            .map(|s| PathBuf::from(s.trim().trim_end_matches('/')))
             .collect();
 
         assert_eq!(parsed_paths.len(), 6);
@@ -439,13 +439,41 @@ mod tests {
             .unwrap_or_default()
             .split(',')
             .filter(|s| !s.trim().is_empty())
-            .map(|s| PathBuf::from(s.trim()))
+            .map(|s| PathBuf::from(s.trim().trim_end_matches('/')))
             .collect();
 
         assert_eq!(filtered_paths.len(), 3);
         assert_eq!(filtered_paths[0], PathBuf::from("/path1"));
         assert_eq!(filtered_paths[1], PathBuf::from("/path2"));
         assert_eq!(filtered_paths[2], PathBuf::from("/path3"));
+
+        // Clean up
+        env::remove_var("BACKUP_PATHS");
+        Ok(())
+    }
+
+    #[test]
+    fn test_backup_paths_trailing_slash_trimming() -> Result<(), BackupServiceError> {
+        use std::env;
+
+        // Test that trailing slashes are properly trimmed from backup paths
+        let test_paths_with_slashes = "/home/user/Documents/,/home/user/.local/share/Paradox Interactive/,/home/user/Projects,/home/user/.config/";
+        env::set_var("BACKUP_PATHS", test_paths_with_slashes);
+
+        // Use the actual config parsing logic
+        let parsed_paths: Vec<PathBuf> = env::var("BACKUP_PATHS")
+            .unwrap_or_default()
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(|s| PathBuf::from(s.trim().trim_end_matches('/')))
+            .collect();
+
+        assert_eq!(parsed_paths.len(), 4);
+        // Verify trailing slashes are removed
+        assert_eq!(parsed_paths[0], PathBuf::from("/home/user/Documents"));
+        assert_eq!(parsed_paths[1], PathBuf::from("/home/user/.local/share/Paradox Interactive"));
+        assert_eq!(parsed_paths[2], PathBuf::from("/home/user/Projects")); // No slash to trim
+        assert_eq!(parsed_paths[3], PathBuf::from("/home/user/.config"));
 
         // Clean up
         env::remove_var("BACKUP_PATHS");

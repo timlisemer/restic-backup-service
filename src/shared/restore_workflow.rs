@@ -339,7 +339,7 @@ impl RestoreWorkflow {
                 }
 
                 // Use recursive copy function
-                self.copy_recursively(&src, &repo.path)?;
+                copy_recursively(&src, &repo.path)?;
                 info!(path = %repo.path.display(), "Copied");
             }
         }
@@ -374,7 +374,7 @@ impl RestoreWorkflow {
 
                 // Try rename first, fallback to copy+delete for cross-filesystem
                 if fs::rename(&src, &repo.path).is_err() {
-                    self.copy_recursively(&src, &repo.path)?;
+                    copy_recursively(&src, &repo.path)?;
                     if src.is_dir() {
                         fs::remove_dir_all(&src)?;
                     } else {
@@ -388,24 +388,23 @@ impl RestoreWorkflow {
         fs::remove_dir_all(dest_dir).ok();
         Ok(())
     }
+}
 
-    /// Recursively copy files and directories
-    fn copy_recursively(&self, src: &Path, dst: &Path) -> Result<(), BackupServiceError> {
-        if src.is_dir() {
-            fs::create_dir_all(dst)?;
-            for entry in fs::read_dir(src)? {
-                let entry = entry?;
-                let src_path = entry.path();
-                let dst_path = dst.join(entry.file_name());
-                self.copy_recursively(&src_path, &dst_path)?;
-            }
-        } else {
-            if let Some(parent) = dst.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::copy(src, dst)?;
+/// Recursively copy files and directories
+fn copy_recursively(src: &Path, dst: &Path) -> Result<(), BackupServiceError> {
+    if src.is_dir() {
+        fs::create_dir_all(dst)?;
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            let src_path = entry.path();
+            let dst_path = dst.join(entry.file_name());
+            copy_recursively(&src_path, &dst_path)?;
         }
-        Ok(())
+    } else {
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(src, dst)?;
     }
-
+    Ok(())
 }

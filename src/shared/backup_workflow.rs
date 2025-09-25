@@ -2,7 +2,6 @@ use crate::config::Config;
 use crate::errors::BackupServiceError;
 use crate::shared::commands::ResticCommandExecutor;
 use crate::shared::paths::{PathMapper, PathUtilities};
-use crate::shared::ui::create_backup_progress_bar;
 use crate::utils::validate_credentials;
 use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
@@ -78,23 +77,34 @@ impl BackupWorkflow {
         all_paths: &[PathBuf],
         hostname: &str,
     ) -> Result<BackupSummary, BackupServiceError> {
-        let pb = create_backup_progress_bar(all_paths.len())?;
         let mut success_count = 0;
         let mut skip_count = 0;
 
         for (idx, path) in all_paths.iter().enumerate() {
-            pb.set_position(idx as u64);
-            pb.set_message(format!("Backing up: {}", path.display()));
+            info!(
+                progress = format!("({}/{})", idx + 1, all_paths.len()),
+                path = %path.display(),
+                "Starting backup"
+            );
 
             let success = self.execute_single_backup(path, hostname).await?;
+
             if success {
                 success_count += 1;
+                info!(
+                    progress = format!("({}/{})", idx + 1, all_paths.len()),
+                    path = %path.display(),
+                    "Backup completed successfully"
+                );
             } else {
                 skip_count += 1;
+                info!(
+                    progress = format!("({}/{})", idx + 1, all_paths.len()),
+                    path = %path.display(),
+                    "Backup skipped"
+                );
             }
         }
-
-        pb.finish_and_clear();
 
         Ok(BackupSummary {
             success_count,
@@ -121,31 +131,38 @@ impl BackupWorkflow {
         // Initialize repository if needed
         restic_cmd.init_if_needed().await?;
 
-        // Run backup
-        let output = restic_cmd.backup(path, hostname).await?;
+        // Run backup with live output
+        let output = restic_cmd.backup(path, hostname, true).await?;
 
-        // Parse backup output
-        if output.contains("snapshot") && output.contains("saved") {
-            let snapshot_id = self.extract_snapshot_id(&output);
-            let has_warnings = output.contains("at least one source file could not be read");
-
-            if has_warnings {
-                warn!(
-                    path = %path.display(),
-                    snapshot_id = %snapshot_id.as_deref().unwrap_or("unknown"),
-                    "Backed up with some files skipped due to I/O errors"
-                );
-            } else {
-                info!(
-                    path = %path.display(),
-                    snapshot_id = %snapshot_id.as_deref().unwrap_or("unknown"),
-                    "Backup completed"
-                );
-            }
+        // For live output mode, empty string means success (no exception thrown)
+        if output.is_empty() {
+            // Live output mode - backup succeeded if no error was thrown
+            info!(path = %path.display(), "Backup completed");
             Ok(true)
         } else {
-            warn!(path = %path.display(), "Failed to backup");
-            Ok(false)
+            // Parse backup output for non-live mode
+            if output.contains("snapshot") && output.contains("saved") {
+                let snapshot_id = self.extract_snapshot_id(&output);
+                let has_warnings = output.contains("at least one source file could not be read");
+
+                if has_warnings {
+                    warn!(
+                        path = %path.display(),
+                        snapshot_id = %snapshot_id.as_deref().unwrap_or("unknown"),
+                        "Backed up with some files skipped due to I/O errors"
+                    );
+                } else {
+                    info!(
+                        path = %path.display(),
+                        snapshot_id = %snapshot_id.as_deref().unwrap_or("unknown"),
+                        "Backup completed"
+                    );
+                }
+                Ok(true)
+            } else {
+                warn!(path = %path.display(), "Failed to backup");
+                Ok(false)
+            }
         }
     }
 
