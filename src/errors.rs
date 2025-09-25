@@ -51,6 +51,16 @@ impl BackupServiceError {
         BackupServiceError::CredentialValidationFailed(Box::new(self))
     }
 
+    /// Standard error for AWS CLI execution failure
+    pub fn aws_command_failed() -> Self {
+        BackupServiceError::CommandNotFound("Failed to execute aws".to_string())
+    }
+
+    /// Standard error for restic command execution failure
+    pub fn restic_command_failed() -> Self {
+        BackupServiceError::CommandNotFound("Failed to execute restic".to_string())
+    }
+
     /// Parse stderr output to determine specific error type
     pub fn from_stderr(stderr: &str, context: &str) -> Self {
         let stderr_lower = stderr.to_lowercase();

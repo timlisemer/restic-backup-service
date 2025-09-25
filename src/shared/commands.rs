@@ -40,9 +40,7 @@ impl CommandExecutor {
             .env("AWS_SECRET_ACCESS_KEY", &self.config.aws_secret_access_key)
             .env("AWS_DEFAULT_REGION", &self.config.aws_default_region)
             .output()
-            .map_err(|_| {
-                BackupServiceError::CommandNotFound("Failed to execute aws".to_string())
-            })?;
+            .map_err(|_| BackupServiceError::aws_command_failed())?;
 
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -70,9 +68,7 @@ impl CommandExecutor {
             .env("AWS_S3_ENDPOINT", &self.config.aws_s3_endpoint)
             .env("RESTIC_PASSWORD", &self.config.restic_password)
             .output()
-            .map_err(|_| {
-                BackupServiceError::CommandNotFound("Failed to execute restic".to_string())
-            })?;
+            .map_err(|_| BackupServiceError::restic_command_failed())?;
 
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -223,7 +219,11 @@ impl S3CommandExecutor {
     /// List S3 directories with proper error handling
     pub async fn list_directories(&self, s3_path: &str) -> Result<Vec<String>, BackupServiceError> {
         let s3_bucket = self.executor.config.s3_bucket()?;
-        let full_path = format!("s3://{}/{}", s3_bucket, s3_path);
+        let full_path = if s3_path.is_empty() {
+            format!("s3://{}/", s3_bucket)
+        } else {
+            format!("s3://{}/{}/", s3_bucket, s3_path)
+        };
 
         let mut args = vec!["s3", "ls", &full_path];
         let endpoint_args = self.executor.get_s3_endpoint_args()?;

@@ -1,11 +1,14 @@
 use crate::config::Config;
 use crate::errors::BackupServiceError;
-use crate::shared::commands::ResticCommandExecutor;
+use crate::shared::commands::{ResticCommandExecutor, S3CommandExecutor};
+use crate::shared::constants::{
+    CATEGORY_DOCKER_VOLUME, CATEGORY_SYSTEM, CATEGORY_USER_HOME, DOCKER_VOLUMES_DIR,
+    HOME_DIR_PREFIX, ROOT_DIR_PREFIX,
+};
 use crate::shared::operations::RepositoryData;
 use crate::shared::paths::PathMapper;
 use chrono::{DateTime, Utc};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -17,14 +20,17 @@ use tracing::info;
 pub struct RepositoryScanner {
     config: Config,
     snapshot_collector: SnapshotCollector,
+    s3_executor: S3CommandExecutor,
 }
 
 impl RepositoryScanner {
     pub fn new(config: Config) -> Result<Self, BackupServiceError> {
         let snapshot_collector = SnapshotCollector::new(config.clone())?;
+        let s3_executor = S3CommandExecutor::new(config.clone())?;
         Ok(Self {
             config,
             snapshot_collector,
+            s3_executor,
         })
     }
 
@@ -38,49 +44,9 @@ impl RepositoryScanner {
         }
     }
 
-    // Execute AWS CLI to list S3 directories and parse output
+    // List S3 directories using shared S3CommandExecutor
     pub async fn list_s3_dirs(&self, s3_path: &str) -> Result<Vec<String>, BackupServiceError> {
-        let s3_bucket = self.config.s3_bucket()?;
-        let full_path = format!("s3://{}/{}/", s3_bucket, s3_path);
-
-        let output = Command::new("aws")
-            .args([
-                "s3",
-                "ls",
-                &full_path,
-                "--endpoint-url",
-                &self.config.s3_endpoint()?,
-            ])
-            .env("AWS_ACCESS_KEY_ID", &self.config.aws_access_key_id)
-            .env("AWS_SECRET_ACCESS_KEY", &self.config.aws_secret_access_key)
-            .env("AWS_DEFAULT_REGION", &self.config.aws_default_region)
-            .output()
-            .map_err(|_| {
-                BackupServiceError::CommandNotFound("Failed to execute aws".to_string())
-            })?;
-
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            // Parse S3 directory listing - critical: preserve spaces in directory names
-            let dirs: Vec<String> = stdout
-                .lines()
-                .filter(|line| line.contains("PRE"))
-                .map(|line| {
-                    // Preserve spaces after "PRE " prefix in S3 output
-                    if let Some(start) = line.find("PRE ") {
-                        let dir_name = &line[start + 4..]; // Skip "PRE "
-                        dir_name.trim_end_matches('/').to_string()
-                    } else {
-                        String::new()
-                    }
-                })
-                .filter(|d| !d.is_empty())
-                .collect();
-            Ok(dirs)
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(BackupServiceError::from_stderr(&stderr, &full_path))
-        }
+        self.s3_executor.list_directories(s3_path).await
     }
 
     /// Scan and collect all repositories for a hostname with true parallelization
@@ -124,10 +90,7 @@ impl RepositoryScanner {
                     .await?;
 
                 if count > 0 {
-                    info!(
-                        "✓ ({}/{}) - {} snapshots found",
-                        current, total_repos, count
-                    );
+                    info!("({}/{}) - {} snapshots found", current, total_repos, count);
                     Ok::<Option<RepositoryData>, BackupServiceError>(Some(RepositoryData {
                         info: repo_info,
                         snapshots,
@@ -165,81 +128,42 @@ impl RepositoryScanner {
     ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
         let mut all_repos = Vec::new();
 
-        all_repos.extend(self.discover_user_home_repositories(hostname).await?);
-
-        all_repos.extend(self.discover_docker_volume_repositories(hostname).await?);
-
-        all_repos.extend(self.discover_system_repositories(hostname).await?);
+        all_repos.extend(
+            self.discover_repositories_by_category(hostname, "user_home")
+                .await?,
+        );
+        all_repos.extend(
+            self.discover_repositories_by_category(hostname, "docker_volume")
+                .await?,
+        );
+        all_repos.extend(
+            self.discover_repositories_by_category(hostname, "system")
+                .await?,
+        );
 
         Ok(all_repos)
     }
 
-    // Unified repository discovery for different categories (user_home/docker_volume/system)
+    // Unified repository discovery for all categories
     async fn discover_repositories_by_category(
         &self,
         hostname: &str,
         category: &str,
     ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
         let category_path = self.build_s3_path(hostname, category)?;
-        let mut repos = Vec::new();
-
         info!("Scanning {} directories...", category);
 
-        // Category-specific path mapping from S3 structure to native filesystem paths
+        let mut repos = Vec::new();
+
         match category {
             "user_home" => {
-                if let Ok(users) = self.list_s3_dirs(&category_path).await {
-                    for user in users {
-                        info!("Processing user: {}", user);
-                        let user_path = format!("{}/{}", category_path, user);
-
-                        if let Ok(subdirs) = self.list_s3_dirs(&user_path).await {
-                            for subdir in subdirs {
-                                let native_subdir = PathMapper::s3_to_native_path(&subdir)?;
-                                let native_path =
-                                    PathBuf::from(format!("/home/{}/{}", user, native_subdir));
-                                let repo_subpath = format!("user_home/{}/{}", user, subdir);
-
-                                repos.push(RepositoryInfo {
-                                    native_path,
-                                    repo_subpath,
-                                    category: "user_home".to_string(),
-                                });
-                            }
-                        }
-                    }
-                }
+                repos.extend(self.discover_user_home_repositories(&category_path).await?)
             }
-            "docker_volume" => {
-                if let Ok(volumes) = self.list_s3_dirs(&category_path).await {
-                    for volume in volumes {
-                        let native_path =
-                            PathBuf::from(format!("/mnt/docker-data/volumes/{}", volume));
-                        let repo_subpath = format!("docker_volume/{}", volume);
-
-                        repos.push(RepositoryInfo {
-                            native_path,
-                            repo_subpath,
-                            category: "docker_volume".to_string(),
-                        });
-                    }
-                }
-            }
-            "system" => {
-                if let Ok(paths) = self.list_s3_dirs(&category_path).await {
-                    for path in paths {
-                        let native_path_str = PathMapper::s3_to_native_path(&path)?;
-                        let native_path = PathBuf::from(format!("/{}", native_path_str));
-                        let repo_subpath = format!("system/{}", path);
-
-                        repos.push(RepositoryInfo {
-                            native_path,
-                            repo_subpath,
-                            category: "system".to_string(),
-                        });
-                    }
-                }
-            }
+            "docker_volume" => repos.extend(
+                self.discover_docker_volume_repositories(&category_path)
+                    .await?,
+            ),
+            "system" => repos.extend(self.discover_system_repositories(&category_path).await?),
             _ => {
                 return Err(BackupServiceError::ConfigurationError(format!(
                     "Unknown repository category: {}",
@@ -253,29 +177,91 @@ impl RepositoryScanner {
 
     async fn discover_user_home_repositories(
         &self,
-        hostname: &str,
+        category_path: &str,
     ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
-        self.discover_repositories_by_category(hostname, "user_home")
-            .await
+        let mut repos = Vec::new();
+
+        if let Ok(users) = self.list_s3_dirs(category_path).await {
+            for user in users {
+                info!("Processing user: {}", user);
+                let user_path = format!("{}/{}", category_path, user);
+
+                if let Ok(subdirs) = self.list_s3_dirs(&user_path).await {
+                    for subdir in subdirs {
+                        let native_subdir = PathMapper::s3_to_native_path(&subdir)?;
+                        let native_path = PathBuf::from(format!(
+                            "{}/{}/{}",
+                            HOME_DIR_PREFIX, user, native_subdir
+                        ));
+                        let repo_subpath = format!("user_home/{}/{}", user, subdir);
+
+                        repos.push(self.create_repository_info(
+                            native_path,
+                            repo_subpath,
+                            CATEGORY_USER_HOME,
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(repos)
     }
 
     async fn discover_docker_volume_repositories(
         &self,
-        hostname: &str,
+        category_path: &str,
     ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
-        self.discover_repositories_by_category(hostname, "docker_volume")
-            .await
+        let mut repos = Vec::new();
+
+        if let Ok(volumes) = self.list_s3_dirs(category_path).await {
+            for volume in volumes {
+                let native_path = PathBuf::from(format!("{}/{}", DOCKER_VOLUMES_DIR, volume));
+                let repo_subpath = format!("docker_volume/{}", volume);
+
+                repos.push(self.create_repository_info(
+                    native_path,
+                    repo_subpath,
+                    CATEGORY_DOCKER_VOLUME,
+                ));
+            }
+        }
+
+        Ok(repos)
     }
 
     async fn discover_system_repositories(
         &self,
-        hostname: &str,
+        category_path: &str,
     ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
-        self.discover_repositories_by_category(hostname, "system")
-            .await
+        let mut repos = Vec::new();
+
+        if let Ok(paths) = self.list_s3_dirs(category_path).await {
+            for path in paths {
+                let native_path_str = PathMapper::s3_to_native_path(&path)?;
+                let native_path = PathBuf::from(format!("{}{}", ROOT_DIR_PREFIX, native_path_str));
+                let repo_subpath = format!("system/{}", path);
+
+                repos.push(self.create_repository_info(native_path, repo_subpath, CATEGORY_SYSTEM));
+            }
+        }
+
+        Ok(repos)
+    }
+
+    fn create_repository_info(
+        &self,
+        native_path: PathBuf,
+        repo_subpath: String,
+        category: &str,
+    ) -> RepositoryInfo {
+        RepositoryInfo {
+            native_path,
+            repo_subpath,
+            category: category.to_string(),
+        }
     }
 }
-
 
 // Collects snapshot data from restic repositories
 #[derive(Clone)]
@@ -320,7 +306,6 @@ impl SnapshotCollector {
     }
 }
 
-
 #[derive(Debug, Clone)]
 pub struct RepositoryInfo {
     pub native_path: PathBuf,
@@ -328,8 +313,7 @@ pub struct RepositoryInfo {
     pub category: String,
 }
 
-impl RepositoryInfo {
-}
+impl RepositoryInfo {}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SnapshotInfo {
@@ -840,7 +824,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_s3_command_executor_parsing_with_spaces() {
-
         let mock_output = r#"                           PRE application logs/
                            PRE database backup files/
                            PRE user data/

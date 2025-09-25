@@ -1,4 +1,7 @@
 use crate::errors::BackupServiceError;
+use crate::shared::constants::{
+    DOCKER_BACKING_FS_BLOCK_DEV, DOCKER_METADATA_DB, DOCKER_VOLUMES_DIR,
+};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
@@ -10,7 +13,7 @@ impl PathUtilities {
     pub fn discover_docker_volumes() -> Result<Vec<PathBuf>, BackupServiceError> {
         let mut volumes = Vec::new();
 
-        let docker_volumes_path = Path::new("/mnt/docker-data/volumes");
+        let docker_volumes_path = Path::new(DOCKER_VOLUMES_DIR);
         if docker_volumes_path.exists() {
             info!("Detecting docker volumes...");
             if let Ok(entries) = std::fs::read_dir(docker_volumes_path) {
@@ -22,7 +25,7 @@ impl PathUtilities {
                             .and_then(|n| n.to_str())
                             .unwrap_or_default();
 
-                        if name != "backingFsBlockDev" && name != "metadata.db" {
+                        if name != DOCKER_BACKING_FS_BLOCK_DEV && name != DOCKER_METADATA_DB {
                             volumes.push(path);
                         }
                     }

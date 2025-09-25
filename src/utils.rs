@@ -6,7 +6,7 @@ use tracing::{error, info, warn};
 
 // Test AWS credentials by attempting S3 bucket listing with AWS CLI
 pub async fn validate_credentials(config: &Config) -> Result<(), BackupServiceError> {
-    info!("🔑 Validating credentials...");
+    info!("Validating credentials...");
 
     let s3_bucket = config.s3_bucket()?;
 
@@ -23,7 +23,7 @@ pub async fn validate_credentials(config: &Config) -> Result<(), BackupServiceEr
         .env("AWS_SECRET_ACCESS_KEY", &config.aws_secret_access_key)
         .env("AWS_DEFAULT_REGION", &config.aws_default_region)
         .output()
-        .map_err(|_| BackupServiceError::CommandNotFound("Failed to execute aws".to_string()))?;
+        .map_err(|_| BackupServiceError::aws_command_failed())?;
 
     if output.status.success() {
         info!("Credentials validated successfully");

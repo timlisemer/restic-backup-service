@@ -1,4 +1,8 @@
 use crate::errors::BackupServiceError;
+use crate::shared::constants::{
+    CATEGORY_DOCKER_VOLUME, CATEGORY_SYSTEM, CATEGORY_USER_HOME, DOCKER_VOLUMES_DIR_WITH_SLASH,
+    HOME_DIR_WITH_SLASH,
+};
 use std::path::PathBuf;
 
 // Represents a backup repository with its native filesystem path and snapshot count
@@ -27,14 +31,14 @@ impl BackupRepo {
         let path_str = self.native_path.to_string_lossy();
 
         // Path categorization logic - drives backup organization structure
-        let result = if path_str.starts_with("/home/") && path_str != "/home/" {
-            "user_home"
-        } else if path_str.starts_with("/mnt/docker-data/volumes/")
-            && path_str != "/mnt/docker-data/volumes/"
+        let result = if path_str.starts_with(HOME_DIR_WITH_SLASH) && path_str != HOME_DIR_WITH_SLASH {
+            CATEGORY_USER_HOME
+        } else if path_str.starts_with(DOCKER_VOLUMES_DIR_WITH_SLASH)
+            && path_str != DOCKER_VOLUMES_DIR_WITH_SLASH
         {
-            "docker_volume"
+            CATEGORY_DOCKER_VOLUME
         } else {
-            "system"
+            CATEGORY_SYSTEM
         };
         Ok(result)
     }

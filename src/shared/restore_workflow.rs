@@ -2,9 +2,10 @@ use crate::config::Config;
 use crate::errors::BackupServiceError;
 use crate::helpers::RepositoryScanner;
 use crate::shared::commands::{ResticCommandExecutor, S3CommandExecutor};
+use crate::shared::operations::RepositoryOperations;
 use crate::shared::ui::{
     confirm_action, select_host, select_repositories, select_timestamp, HostSelection,
-    RepositorySelection, RepositorySelectionItem, SnapshotItem, TimestampSelection,
+    RepositorySelection, RepositorySelectionItem, TimestampSelection,
 };
 use crate::utils::validate_credentials;
 use chrono::{DateTime, Duration, Utc};
@@ -95,21 +96,10 @@ impl RestoreWorkflow {
         let scanner = RepositoryScanner::new(self.config.clone())?;
 
         let repo_infos = scanner.scan_repositories(hostname).await?;
-        let mut repos = Vec::new();
+        info!(repo_count = %repo_infos.len(), "Converting repository data for UI...");
 
-        for repo_info in repo_infos {
-            if let Some(snapshots) = self
-                .get_repo_snapshots(hostname, &repo_info.info.repo_subpath)
-                .await?
-            {
-                repos.push(RepositorySelectionItem {
-                    path: repo_info.info.native_path,
-                    repo_subpath: repo_info.info.repo_subpath,
-                    category: repo_info.info.category,
-                    snapshots,
-                });
-            }
-        }
+        let operations = RepositoryOperations::new(self.config.clone())?;
+        let repos = operations.convert_to_selection_items(repo_infos)?;
 
         if repos.is_empty() {
             error!(host = %hostname, "No backups found for host");
@@ -118,6 +108,7 @@ impl RestoreWorkflow {
             ));
         }
 
+        info!(final_repo_count = %repos.len(), "Repository data converted successfully");
         Ok(repos)
     }
 
@@ -126,6 +117,8 @@ impl RestoreWorkflow {
         &self,
         backup_data: Vec<RepositorySelectionItem>,
     ) -> Result<RepositorySelection, BackupServiceError> {
+        info!(repo_count = %backup_data.len(), "Found repositories, starting selection phase");
+
         let repository_selection = select_repositories(backup_data, self.path_opt.clone()).await?;
 
         info!(repo_count = %repository_selection.selected_repos.len(), "Selected repositories for restoration");
@@ -171,16 +164,21 @@ impl RestoreWorkflow {
             .restore_repositories(selected_repos, selected_timestamp, &dest_dir)
             .await?;
 
-        info!(
-            restored_count = %restored_count,
-            skipped_count = %skipped_count,
-            destination = %dest_dir.display(),
-            "Restoration Summary"
-        );
+        // Display detailed summary
+        info!("");
+        info!("Restoration Summary:");
+        info!("  Successfully restored: {} repositories", restored_count);
+        if skipped_count > 0 {
+            info!("  Skipped: {} repositories", skipped_count);
+        }
+        info!("  Destination: {}", dest_dir.display());
 
         if restored_count > 0 {
+            info!("Restoration completed successfully");
             self.handle_restored_files(selected_repos, &dest_dir)
                 .await?;
+        } else {
+            warn!("No repositories were restored");
         }
 
         Ok(())
@@ -196,10 +194,13 @@ impl RestoreWorkflow {
         let mut restored_count = 0;
         let mut skipped_count = 0;
 
-        for repo in selected_repos {
+        info!("Starting restoration process");
+
+        for (idx, repo) in selected_repos.iter().enumerate() {
             info!(
                 path = %repo.path.display(),
                 repo_subpath = %repo.repo_subpath,
+                progress = format!("({}/{})", idx + 1, selected_repos.len()),
                 "Restoring repository"
             );
 
@@ -219,8 +220,15 @@ impl RestoreWorkflow {
                 });
 
             if let Some(snapshot) = best_snapshot {
+                info!(
+                    path = %repo.path.display(),
+                    snapshot_id = %snapshot.id,
+                    timestamp = %snapshot.time.format("%Y-%m-%dT%H:%M:%S"),
+                    "Found snapshot, starting restore"
+                );
+
                 let restic_cmd = ResticCommandExecutor::new(self.config.clone(), repo_url)?;
-                restic_cmd
+                let restore_output = restic_cmd
                     .restore(
                         &snapshot.id,
                         &repo.path.to_string_lossy(),
@@ -228,17 +236,36 @@ impl RestoreWorkflow {
                     )
                     .await?;
 
-                info!(
-                    path = %repo.path.display(),
-                    snapshot_id = %snapshot.id,
-                    timestamp = %snapshot.time.format("%Y-%m-%d %H:%M:%S"),
-                    "Restore completed"
-                );
+                // Check if the restoration was empty (like old script detection)
+                let restored_path = dest_dir.join(repo.path.strip_prefix("/").unwrap_or(&repo.path));
+                let is_empty = if restored_path.exists() {
+                    std::fs::read_dir(&restored_path)
+                        .map(|mut entries| entries.next().is_none())
+                        .unwrap_or(true)
+                } else {
+                    true
+                };
+
+                if is_empty && restore_output.contains("0 B") {
+                    info!(
+                        path = %repo.path.display(),
+                        snapshot_id = %snapshot.id,
+                        timestamp = %snapshot.time.format("%Y-%m-%dT%H:%M:%S"),
+                        "Restored (empty volume - directories only)"
+                    );
+                } else {
+                    info!(
+                        path = %repo.path.display(),
+                        snapshot_id = %snapshot.id,
+                        timestamp = %snapshot.time.format("%Y-%m-%dT%H:%M:%S"),
+                        "Restored successfully"
+                    );
+                }
                 restored_count += 1;
             } else {
                 warn!(
                     path = %repo.path.display(),
-                    "No suitable snapshots found"
+                    "No suitable snapshots found, skipping"
                 );
                 skipped_count += 1;
             }
@@ -347,33 +374,4 @@ impl RestoreWorkflow {
         s3_executor.get_hosts().await
     }
 
-    /// Get repository snapshots
-    async fn get_repo_snapshots(
-        &self,
-        hostname: &str,
-        repo_subpath: &str,
-    ) -> Result<Option<Vec<SnapshotItem>>, BackupServiceError> {
-        let repo_url = format!(
-            "{}/{}/{}",
-            self.config.restic_repo_base, hostname, repo_subpath
-        );
-        let restic_cmd = ResticCommandExecutor::new(self.config.clone(), repo_url)?;
-
-        let snapshots = restic_cmd.snapshots(None).await?;
-
-        let snapshot_list: Vec<SnapshotItem> = snapshots
-            .into_iter()
-            .filter_map(|s| {
-                let time = s["time"].as_str()?.parse::<DateTime<Utc>>().ok()?;
-                let id = s["short_id"].as_str()?.to_string();
-                Some(SnapshotItem { id, time })
-            })
-            .collect();
-
-        if !snapshot_list.is_empty() {
-            Ok(Some(snapshot_list))
-        } else {
-            Ok(None)
-        }
-    }
 }

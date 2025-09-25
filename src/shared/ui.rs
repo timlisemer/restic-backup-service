@@ -3,6 +3,19 @@ use chrono::{DateTime, Duration, Utc};
 use dialoguer::{Confirm, MultiSelect, Select};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
+use tracing::info;
+
+/// Handle category-based repository selection
+fn handle_category_selection(
+    backup_data: &[RepositorySelectionItem],
+    category: &str,
+) -> Vec<RepositorySelectionItem> {
+    backup_data
+        .iter()
+        .filter(|r| r.category == category)
+        .cloned()
+        .collect()
+}
 
 /// Host selection data
 #[derive(Debug, Clone)]
@@ -73,13 +86,37 @@ pub async fn select_repositories(
     backup_data: Vec<RepositorySelectionItem>,
     path_opt: Option<String>,
 ) -> Result<RepositorySelection, BackupServiceError> {
+    use tracing::info;
+
     let selected_repos = if let Some(path) = path_opt {
+        info!(path = %path, "Filtering repositories by specified path");
         backup_data
             .iter()
             .filter(|r| r.path.to_string_lossy() == path)
             .cloned()
             .collect()
     } else {
+        info!("Displaying repository selection menu");
+
+        // Display summary first
+        let user_home_count = backup_data
+            .iter()
+            .filter(|r| r.category == "user_home")
+            .count();
+        let docker_count = backup_data
+            .iter()
+            .filter(|r| r.category == "docker_volume")
+            .count();
+        let system_count = backup_data
+            .iter()
+            .filter(|r| r.category == "system")
+            .count();
+
+        info!(
+            "Found backups: User Home ({}), Docker Volumes ({}), System ({})",
+            user_home_count, docker_count, system_count
+        );
+
         let categories = vec![
             "All (everything)",
             "User Home (all user directories)",
@@ -96,21 +133,9 @@ pub async fn select_repositories(
 
         match selection {
             0 => backup_data.clone(),
-            1 => backup_data
-                .iter()
-                .filter(|r| r.category == "user_home")
-                .cloned()
-                .collect(),
-            2 => backup_data
-                .iter()
-                .filter(|r| r.category == "docker_volume")
-                .cloned()
-                .collect(),
-            3 => backup_data
-                .iter()
-                .filter(|r| r.category == "system")
-                .cloned()
-                .collect(),
+            1 => handle_category_selection(&backup_data, "user_home"),
+            2 => handle_category_selection(&backup_data, "docker_volume"),
+            3 => handle_category_selection(&backup_data, "system"),
             4 => {
                 let items: Vec<String> = backup_data
                     .iter()
@@ -176,6 +201,10 @@ pub async fn select_timestamp(
             ));
         }
 
+        use tracing::info;
+
+        info!("🕐 Getting available restore time windows...");
+
         let mut time_windows = Vec::new();
         let mut window_times = Vec::new();
 
@@ -202,8 +231,13 @@ pub async fn select_timestamp(
             }
         }
 
+        info!("Available restore time windows (5-minute groups):");
+        for (i, window) in time_windows.iter().enumerate() {
+            info!("  {}. {}", i + 1, window);
+        }
+
         let selection = Select::new()
-            .with_prompt("Select time window")
+            .with_prompt("Select time window [1]")
             .items(&time_windows)
             .default(0)
             .interact()?;

@@ -3,6 +3,7 @@ use crate::errors::BackupServiceError;
 use crate::helpers::{RepositoryInfo, RepositoryScanner, SnapshotInfo};
 use crate::repository::BackupRepo;
 use crate::shared::commands::S3CommandExecutor;
+use crate::shared::ui::RepositorySelectionItem;
 
 // High-level operations manager for repository scanning and data collection
 pub struct RepositoryOperations {
@@ -64,6 +65,35 @@ impl RepositoryOperations {
             .flat_map(|repo| &repo.snapshots)
             .cloned()
             .collect()
+    }
+
+    // Convert repository data to UI selection format
+    pub fn convert_to_selection_items(
+        &self,
+        repo_data: Vec<RepositoryData>,
+    ) -> Result<Vec<RepositorySelectionItem>, BackupServiceError> {
+        use crate::shared::ui::{RepositorySelectionItem, SnapshotItem};
+
+        let mut repos = Vec::new();
+        for repo_info in repo_data {
+            if !repo_info.snapshots.is_empty() {
+                let snapshots = repo_info.snapshots
+                    .into_iter()
+                    .map(|s| SnapshotItem {
+                        id: s.id,
+                        time: s.time,
+                    })
+                    .collect();
+
+                repos.push(RepositorySelectionItem {
+                    path: repo_info.info.native_path,
+                    repo_subpath: repo_info.info.repo_subpath,
+                    category: repo_info.info.category,
+                    snapshots,
+                });
+            }
+        }
+        Ok(repos)
     }
 }
 
