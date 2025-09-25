@@ -21,7 +21,8 @@ impl DisplayFormatter {
 
     /// Display backup paths summary section
     pub fn display_backup_paths_summary(repos: &[BackupRepo]) -> Result<(), BackupServiceError> {
-        info!("\nBACKUP PATHS SUMMARY:");
+        info!("");
+        info!("BACKUP PATHS SUMMARY:");
         info!("====================");
 
         // Group by category
@@ -37,7 +38,8 @@ impl DisplayFormatter {
 
     /// Display snapshot timeline section
     pub fn display_snapshot_timeline(snapshots: &[SnapshotInfo]) -> Result<(), BackupServiceError> {
-        info!("\nSNAPSHOT TIMELINE:");
+        info!("");
+        info!("SNAPSHOT TIMELINE:");
         info!("==================");
 
         if snapshots.is_empty() {
@@ -69,7 +71,8 @@ impl DisplayFormatter {
         let empty_vec = Vec::new();
         let user_repos = categories.get("user_home").unwrap_or(&empty_vec);
 
-        info!("\nUser Home ({} paths):", user_repos.len());
+        info!("");
+        info!("User Home ({} paths):", user_repos.len());
         if user_repos.is_empty() {
             info!("  None");
         } else {
@@ -88,7 +91,8 @@ impl DisplayFormatter {
         let empty_vec = Vec::new();
         let docker_repos = categories.get("docker_volume").unwrap_or(&empty_vec);
 
-        info!("\nDocker Volumes ({} paths):", docker_repos.len());
+        info!("");
+        info!("Docker Volumes ({} paths):", docker_repos.len());
         if docker_repos.is_empty() {
             info!("  None");
         } else {
@@ -107,7 +111,8 @@ impl DisplayFormatter {
         let empty_vec = Vec::new();
         let system_repos = categories.get("system").unwrap_or(&empty_vec);
 
-        info!("\nSystem ({} paths):", system_repos.len());
+        info!("");
+        info!("System ({} paths):", system_repos.len());
         if system_repos.is_empty() {
             info!("  None");
         } else {
@@ -152,7 +157,8 @@ impl DisplayFormatter {
 
         for time in times.iter().take(20) {
             if let Some(snaps) = timeline.get(time) {
-                info!("\n{}:", time);
+                info!("");
+                info!("{}:", time);
                 for snap in snaps {
                     Self::display_snapshot_entry(snap)?;
                 }
@@ -160,7 +166,8 @@ impl DisplayFormatter {
         }
 
         if times.len() > 20 {
-            info!("\n... and {} more time points", times.len() - 20);
+            info!("");
+            info!("... and {} more time points", times.len() - 20);
         }
 
         Ok(())

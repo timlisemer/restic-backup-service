@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::errors::BackupServiceError;
-use crate::helpers::{RepositoryInfo, RepositoryScanner, SnapshotCollector, SnapshotInfo};
+use crate::helpers::{RepositoryInfo, RepositoryScanner, SnapshotInfo};
 use crate::repository::BackupRepo;
 use crate::shared::commands::S3CommandExecutor;
 
@@ -8,7 +8,6 @@ use crate::shared::commands::S3CommandExecutor;
 pub struct RepositoryOperations {
     config: Config,
     scanner: RepositoryScanner,
-    snapshot_collector: SnapshotCollector,
 }
 
 /// Combined repository data with snapshots
@@ -22,12 +21,10 @@ pub struct RepositoryData {
 impl RepositoryOperations {
     pub fn new(config: Config) -> Result<Self, BackupServiceError> {
         let scanner = RepositoryScanner::new(config.clone())?;
-        let snapshot_collector = SnapshotCollector::new(config.clone())?;
 
         Ok(Self {
             config,
             scanner,
-            snapshot_collector,
         })
     }
 
@@ -36,25 +33,8 @@ impl RepositoryOperations {
         &self,
         hostname: &str,
     ) -> Result<Vec<RepositoryData>, BackupServiceError> {
-        let repo_infos = self.scanner.scan_repositories(hostname).await?;
-        let mut repositories = Vec::new();
-
-        for repo_info in repo_infos {
-            let (count, snapshots) = self
-                .snapshot_collector
-                .get_snapshots(&repo_info.repo_subpath, &repo_info.native_path)
-                .await?;
-
-            if count > 0 {
-                repositories.push(RepositoryData {
-                    info: repo_info,
-                    snapshots,
-                    snapshot_count: count,
-                });
-            }
-        }
-
-        Ok(repositories)
+        // Scanning now includes parallel checking, so we just call scan_repositories
+        self.scanner.scan_repositories(hostname).await
     }
 
     /// Get available hosts from S3 bucket

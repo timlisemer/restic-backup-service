@@ -99,13 +99,13 @@ impl RestoreWorkflow {
 
         for repo_info in repo_infos {
             if let Some(snapshots) = self
-                .get_repo_snapshots(hostname, &repo_info.repo_subpath)
+                .get_repo_snapshots(hostname, &repo_info.info.repo_subpath)
                 .await?
             {
                 repos.push(RepositorySelectionItem {
-                    path: repo_info.native_path,
-                    repo_subpath: repo_info.repo_subpath,
-                    category: repo_info.category,
+                    path: repo_info.info.native_path,
+                    repo_subpath: repo_info.info.repo_subpath,
+                    category: repo_info.info.category,
                     snapshots,
                 });
             }
