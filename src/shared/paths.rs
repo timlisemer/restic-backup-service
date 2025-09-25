@@ -67,10 +67,13 @@ pub struct PathMapper;
 impl PathMapper {
     /// Convert S3 directory name back to native path (preserve filename underscores)
     pub fn s3_to_native_path(s3_dir: &str) -> Result<String, BackupServiceError> {
-        let result = if s3_dir.matches('_').count() > 1 {
-            s3_dir.replace('_', "/")
+        // Remove trailing underscore if present (S3 directory marker)
+        let trimmed = s3_dir.trim_end_matches('_');
+
+        let result = if trimmed.matches('_').count() > 1 {
+            trimmed.replace('_', "/")
         } else {
-            s3_dir.to_string()
+            trimmed.to_string()
         };
         Ok(result)
     }
