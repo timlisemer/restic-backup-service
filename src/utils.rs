@@ -51,7 +51,7 @@ pub async fn show_size(config: Config, path: String) -> Result<(), BackupService
 
     info!(path = %path, "Checking size for path");
 
-    let snapshots = restic_cmd.snapshots(Some(&path)).await?;
+    let snapshots = restic_cmd.snapshots().await?;
 
     if snapshots.is_empty() {
         warn!(path = %path, "No snapshots found for path");

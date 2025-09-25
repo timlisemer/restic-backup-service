@@ -56,25 +56,47 @@ impl CommandExecutor {
         repo_url: &str,
         args: &[&str],
         context: &str,
+        show_live_output: bool,
     ) -> Result<String, BackupServiceError> {
-        debug!(repo_url = %repo_url, args = ?args, context = %context, "Executing restic command");
+        debug!(repo_url = %repo_url, args = ?args, context = %context, show_live_output = %show_live_output, "Executing restic command");
 
-        let output = Command::new("restic")
-            .args(["--repo", repo_url])
-            .args(args)
-            .env("AWS_ACCESS_KEY_ID", &self.config.aws_access_key_id)
-            .env("AWS_SECRET_ACCESS_KEY", &self.config.aws_secret_access_key)
-            .env("AWS_DEFAULT_REGION", &self.config.aws_default_region)
-            .env("AWS_S3_ENDPOINT", &self.config.aws_s3_endpoint)
-            .env("RESTIC_PASSWORD", &self.config.restic_password)
-            .output()
-            .map_err(|_| BackupServiceError::restic_command_failed())?;
+        if show_live_output {
+            // For operations like restore where we want to see live progress
+            let status = Command::new("restic")
+                .args(["--repo", repo_url])
+                .args(args)
+                .env("AWS_ACCESS_KEY_ID", &self.config.aws_access_key_id)
+                .env("AWS_SECRET_ACCESS_KEY", &self.config.aws_secret_access_key)
+                .env("AWS_DEFAULT_REGION", &self.config.aws_default_region)
+                .env("AWS_S3_ENDPOINT", &self.config.aws_s3_endpoint)
+                .env("RESTIC_PASSWORD", &self.config.restic_password)
+                .status()
+                .map_err(|_| BackupServiceError::restic_command_failed())?;
 
-        if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout).to_string())
+            if status.success() {
+                Ok(String::new()) // Return empty string for live output mode
+            } else {
+                Err(BackupServiceError::restic_command_failed())
+            }
         } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(BackupServiceError::from_stderr(&stderr, repo_url))
+            // Original behavior for operations where we need to capture output
+            let output = Command::new("restic")
+                .args(["--repo", repo_url])
+                .args(args)
+                .env("AWS_ACCESS_KEY_ID", &self.config.aws_access_key_id)
+                .env("AWS_SECRET_ACCESS_KEY", &self.config.aws_secret_access_key)
+                .env("AWS_DEFAULT_REGION", &self.config.aws_default_region)
+                .env("AWS_S3_ENDPOINT", &self.config.aws_s3_endpoint)
+                .env("RESTIC_PASSWORD", &self.config.restic_password)
+                .output()
+                .map_err(|_| BackupServiceError::restic_command_failed())?;
+
+            if output.status.success() {
+                Ok(String::from_utf8_lossy(&output.stdout).to_string())
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                Err(BackupServiceError::from_stderr(&stderr, repo_url))
+            }
         }
     }
 
@@ -97,6 +119,7 @@ pub async fn check_restic_repository_exists(
             repo_url,
             &["snapshots", "--json"],
             "repository existence check",
+            false,
         )
         .await
     {
@@ -117,7 +140,7 @@ impl ResticCommandExecutor {
         if !self.repo_exists().await? {
             info!(repo_url = %self.repo_url, "Initializing repository");
             self.executor
-                .execute_restic_command(&self.repo_url, &["init"], "repository initialization")
+                .execute_restic_command(&self.repo_url, &["init"], "repository initialization", false)
                 .await?;
             info!("Repository initialized");
         }
@@ -139,20 +162,18 @@ impl ResticCommandExecutor {
                 &self.repo_url,
                 &["backup", &path_str, "--host", hostname, "--tag", tag],
                 &format!("backup {}", path_str),
+                false,
             )
             .await
     }
 
     /// Get snapshots as JSON
-    pub async fn snapshots(&self, path: Option<&str>) -> Result<Vec<Value>, BackupServiceError> {
-        let mut args = vec!["snapshots", "--json"];
-        if let Some(p) = path {
-            args.extend(&["--path", p]);
-        }
+    pub async fn snapshots(&self) -> Result<Vec<Value>, BackupServiceError> {
+        let args = vec!["snapshots", "--json"];
 
         let output = self
             .executor
-            .execute_restic_command(&self.repo_url, &args, "snapshots listing")
+            .execute_restic_command(&self.repo_url, &args, "snapshots listing", false)
             .await?;
 
         let snapshots: Vec<Value> = serde_json::from_str(&output).unwrap_or_default();
@@ -171,6 +192,7 @@ impl ResticCommandExecutor {
                 &self.repo_url,
                 &["restore", snapshot_id, "--path", path, "--target", target],
                 &format!("restore {} to {}", snapshot_id, target),
+                true, // Enable live output for restore operations
             )
             .await
     }
@@ -185,6 +207,7 @@ impl ResticCommandExecutor {
                     "stats", "latest", "--mode", "raw-data", "--json", "--path", path,
                 ],
                 &format!("stats for {}", path),
+                false,
             )
             .await?;
 

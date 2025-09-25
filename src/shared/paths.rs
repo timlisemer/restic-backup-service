@@ -65,18 +65,6 @@ impl PathUtilities {
 pub struct PathMapper;
 
 impl PathMapper {
-    /// Convert S3 directory name back to native path (preserve filename underscores)
-    pub fn s3_to_native_path(s3_dir: &str) -> Result<String, BackupServiceError> {
-        // Remove trailing underscore if present (S3 directory marker)
-        let trimmed = s3_dir.trim_end_matches('_');
-
-        let result = if trimmed.matches('_').count() > 1 {
-            trimmed.replace('_', "/")
-        } else {
-            trimmed.to_string()
-        };
-        Ok(result)
-    }
 
     /// Convert native filesystem path to repository subpath
     pub fn path_to_repo_subpath(path: &Path) -> Result<String, BackupServiceError> {
@@ -144,20 +132,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_s3_to_native_path() -> Result<(), BackupServiceError> {
-        assert_eq!(PathMapper::s3_to_native_path("documents")?, "documents");
-        assert_eq!(
-            PathMapper::s3_to_native_path("my_deep_path")?,
-            "my/deep/path"
-        );
-        assert_eq!(
-            PathMapper::s3_to_native_path("etc_nginx_conf")?,
-            "etc/nginx/conf"
-        );
-        assert_eq!(PathMapper::s3_to_native_path("single")?, "single");
-        Ok(())
-    }
 
     // Additional core tests kept, but most bloat removed
     #[test]

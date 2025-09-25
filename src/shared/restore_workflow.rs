@@ -324,18 +324,23 @@ impl RestoreWorkflow {
         for repo in selected_repos {
             let src = dest_dir.join(repo.path.strip_prefix("/").unwrap_or(&repo.path));
             if src.exists() {
-                let parent = repo.path.parent().unwrap_or(Path::new("/"));
-                fs::create_dir_all(parent)?;
-
-                let result = std::process::Command::new("cp")
-                    .args(["-rf", &src.to_string_lossy(), &parent.to_string_lossy()])
-                    .output()?;
-
-                if result.status.success() {
-                    info!(path = %repo.path.display(), "Copied");
-                } else {
-                    error!(path = %repo.path.display(), "Failed to copy");
+                // Ensure the full destination path exists, not just the parent
+                if let Some(parent) = repo.path.parent() {
+                    fs::create_dir_all(parent)?;
                 }
+
+                // Remove existing destination if it exists
+                if repo.path.exists() {
+                    if repo.path.is_dir() {
+                        fs::remove_dir_all(&repo.path)?;
+                    } else {
+                        fs::remove_file(&repo.path)?;
+                    }
+                }
+
+                // Use recursive copy function
+                self.copy_recursively(&src, &repo.path)?;
+                info!(path = %repo.path.display(), "Copied");
             }
         }
 
@@ -353,17 +358,53 @@ impl RestoreWorkflow {
         for repo in selected_repos {
             let src = dest_dir.join(repo.path.strip_prefix("/").unwrap_or(&repo.path));
             if src.exists() {
-                if repo.path.exists() {
-                    fs::remove_dir_all(&repo.path)?;
+                // Ensure the full destination path structure exists
+                if let Some(parent) = repo.path.parent() {
+                    fs::create_dir_all(parent)?;
                 }
-                let parent = repo.path.parent().unwrap_or(Path::new("/"));
-                fs::create_dir_all(parent)?;
-                fs::rename(&src, &repo.path)?;
+
+                // Remove existing destination if it exists
+                if repo.path.exists() {
+                    if repo.path.is_dir() {
+                        fs::remove_dir_all(&repo.path)?;
+                    } else {
+                        fs::remove_file(&repo.path)?;
+                    }
+                }
+
+                // Try rename first, fallback to copy+delete for cross-filesystem
+                if fs::rename(&src, &repo.path).is_err() {
+                    self.copy_recursively(&src, &repo.path)?;
+                    if src.is_dir() {
+                        fs::remove_dir_all(&src)?;
+                    } else {
+                        fs::remove_file(&src)?;
+                    }
+                }
                 info!(path = %repo.path.display(), "Moved");
             }
         }
 
         fs::remove_dir_all(dest_dir).ok();
+        Ok(())
+    }
+
+    /// Recursively copy files and directories
+    fn copy_recursively(&self, src: &Path, dst: &Path) -> Result<(), BackupServiceError> {
+        if src.is_dir() {
+            fs::create_dir_all(dst)?;
+            for entry in fs::read_dir(src)? {
+                let entry = entry?;
+                let src_path = entry.path();
+                let dst_path = dst.join(entry.file_name());
+                self.copy_recursively(&src_path, &dst_path)?;
+            }
+        } else {
+            if let Some(parent) = dst.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(src, dst)?;
+        }
         Ok(())
     }
 

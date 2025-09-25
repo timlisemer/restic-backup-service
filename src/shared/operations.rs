@@ -3,19 +3,25 @@ use crate::errors::BackupServiceError;
 use crate::repository::BackupRepo;
 use crate::shared::commands::{ResticCommandExecutor, S3CommandExecutor};
 use crate::shared::constants::{
-    CATEGORY_DOCKER_VOLUME, CATEGORY_SYSTEM, CATEGORY_USER_HOME, DOCKER_VOLUMES_DIR,
-    HOME_DIR_PREFIX, ROOT_DIR_PREFIX,
+    CATEGORY_DOCKER_VOLUME, CATEGORY_SYSTEM, CATEGORY_USER_HOME,
 };
-use crate::shared::paths::PathMapper;
 use chrono::{DateTime, Utc};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use tracing::{info, warn};
 
-// Repository metadata information
+// Repository discovered from S3 but not yet scanned for snapshots
+#[derive(Debug, Clone)]
+pub struct UnscannedRepository {
+    pub repo_subpath: String,
+    pub category: String,
+}
+
+// Repository metadata information (after scanning snapshots for actual path)
 #[derive(Debug, Clone)]
 pub struct RepositoryInfo {
     pub native_path: PathBuf,
@@ -65,6 +71,7 @@ pub struct RepositoryOperations {
 #[derive(Clone)]
 pub struct SnapshotCollector {
     config: Config,
+    path_cache: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl RepositoryOperations {
@@ -120,31 +127,44 @@ impl RepositoryOperations {
         // Parallel execution: spawn concurrent tasks for repository checking
         let mut tasks = Vec::new();
 
-        for repo_info in all_repo_infos {
+        for unscanned_repo in all_repo_infos {
             let snapshot_collector = self.snapshot_collector.clone();
             let counter_clone = counter.clone();
 
             // Each repository is checked concurrently using tokio::spawn
             let task = tokio::spawn(async move {
                 let current = counter_clone.fetch_add(1, Ordering::SeqCst) + 1;
-                let native_path = &repo_info.native_path;
-                let repo_subpath = &repo_info.repo_subpath;
+                let repo_subpath = &unscanned_repo.repo_subpath;
 
-                info!(
-                    "Checking ({}/{}) - {}",
-                    current,
-                    total_repos,
-                    native_path.display()
-                );
-
+                // Get snapshots first, which will cache the actual path
                 let result = snapshot_collector
-                    .get_snapshots(repo_subpath, native_path)
+                    .get_snapshots(repo_subpath)
                     .await;
 
                 match result {
                     Ok((count, snapshots)) => {
                         if count > 0 {
+                            // Get the actual path from cache after snapshots were processed
+                            let actual_path = snapshot_collector
+                                .get_cached_native_path(repo_subpath)
+                                .unwrap_or_else(|| "unknown_path".to_string());
+
+                            info!(
+                                "Checking ({}/{}) - {}",
+                                current,
+                                total_repos,
+                                actual_path
+                            );
+
                             info!("({}/{}) - {} snapshots found", current, total_repos, count);
+
+                            // Create RepositoryInfo with actual path from snapshots
+                            let repo_info = RepositoryInfo {
+                                native_path: PathBuf::from(actual_path),
+                                repo_subpath: unscanned_repo.repo_subpath,
+                                category: unscanned_repo.category,
+                            };
+
                             Ok::<Option<RepositoryData>, BackupServiceError>(Some(RepositoryData {
                                 info: repo_info,
                                 snapshots,
@@ -152,20 +172,20 @@ impl RepositoryOperations {
                             }))
                         } else {
                             warn!(
-                                "({}/{}) - No snapshots found for path: {}",
+                                "({}/{}) - No snapshots found for repo: {}",
                                 current,
                                 total_repos,
-                                native_path.display()
+                                repo_subpath
                             );
                             Ok::<Option<RepositoryData>, BackupServiceError>(None)
                         }
                     }
                     Err(e) => {
                         warn!(
-                            "({}/{}) - Failed to get snapshots for path '{}': {}",
+                            "({}/{}) - Failed to get snapshots for repo '{}': {}",
                             current,
                             total_repos,
-                            native_path.display(),
+                            repo_subpath,
                             e
                         );
                         Ok::<Option<RepositoryData>, BackupServiceError>(None)
@@ -197,7 +217,7 @@ impl RepositoryOperations {
     async fn discover_all_repositories(
         &self,
         hostname: &str,
-    ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
+    ) -> Result<Vec<UnscannedRepository>, BackupServiceError> {
         let mut all_repos = Vec::new();
 
         all_repos.extend(
@@ -221,7 +241,7 @@ impl RepositoryOperations {
         &self,
         hostname: &str,
         category: &str,
-    ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
+    ) -> Result<Vec<UnscannedRepository>, BackupServiceError> {
         let category_path = self.build_s3_path(hostname, category)?;
         info!("Scanning {} directories...", category);
 
@@ -250,7 +270,7 @@ impl RepositoryOperations {
     async fn discover_user_home_repositories(
         &self,
         category_path: &str,
-    ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
+    ) -> Result<Vec<UnscannedRepository>, BackupServiceError> {
         let mut repos = Vec::new();
 
         if let Ok(users) = self.list_s3_dirs(category_path).await {
@@ -260,15 +280,9 @@ impl RepositoryOperations {
 
                 if let Ok(subdirs) = self.list_s3_dirs(&user_path).await {
                     for subdir in subdirs {
-                        let native_subdir = PathMapper::s3_to_native_path(&subdir)?;
-                        let native_path = PathBuf::from(format!(
-                            "{}/{}/{}",
-                            HOME_DIR_PREFIX, user, native_subdir
-                        ));
                         let repo_subpath = format!("user_home/{}/{}", user, subdir);
 
-                        repos.push(self.create_repository_info(
-                            native_path,
+                        repos.push(self.create_unscanned_repository(
                             repo_subpath,
                             CATEGORY_USER_HOME,
                         ));
@@ -283,16 +297,14 @@ impl RepositoryOperations {
     async fn discover_docker_volume_repositories(
         &self,
         category_path: &str,
-    ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
+    ) -> Result<Vec<UnscannedRepository>, BackupServiceError> {
         let mut repos = Vec::new();
 
         if let Ok(volumes) = self.list_s3_dirs(category_path).await {
             for volume in volumes {
-                let native_path = PathBuf::from(format!("{}/{}", DOCKER_VOLUMES_DIR, volume));
                 let repo_subpath = format!("docker_volume/{}", volume);
 
-                repos.push(self.create_repository_info(
-                    native_path,
+                repos.push(self.create_unscanned_repository(
                     repo_subpath,
                     CATEGORY_DOCKER_VOLUME,
                 ));
@@ -305,30 +317,26 @@ impl RepositoryOperations {
     async fn discover_system_repositories(
         &self,
         category_path: &str,
-    ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
+    ) -> Result<Vec<UnscannedRepository>, BackupServiceError> {
         let mut repos = Vec::new();
 
         if let Ok(paths) = self.list_s3_dirs(category_path).await {
             for path in paths {
-                let native_path_str = PathMapper::s3_to_native_path(&path)?;
-                let native_path = PathBuf::from(format!("{}{}", ROOT_DIR_PREFIX, native_path_str));
                 let repo_subpath = format!("system/{}", path);
 
-                repos.push(self.create_repository_info(native_path, repo_subpath, CATEGORY_SYSTEM));
+                repos.push(self.create_unscanned_repository(repo_subpath, CATEGORY_SYSTEM));
             }
         }
 
         Ok(repos)
     }
 
-    fn create_repository_info(
+    fn create_unscanned_repository(
         &self,
-        native_path: PathBuf,
         repo_subpath: String,
         category: &str,
-    ) -> RepositoryInfo {
-        RepositoryInfo {
-            native_path,
+    ) -> UnscannedRepository {
+        UnscannedRepository {
             repo_subpath,
             category: category.to_string(),
         }
@@ -394,22 +402,48 @@ impl RepositoryOperations {
 
 impl SnapshotCollector {
     pub fn new(config: Config) -> Result<Self, BackupServiceError> {
-        Ok(Self { config })
+        Ok(Self {
+            config,
+            path_cache: Arc::new(Mutex::new(HashMap::new())),
+        })
     }
 
     // Retrieve and parse snapshot information from restic repository
     pub async fn get_snapshots(
         &self,
         repo_subpath: &str,
-        native_path: &Path,
     ) -> Result<(usize, Vec<SnapshotInfo>), BackupServiceError> {
         let repo_url = self.config.get_repo_url(repo_subpath)?;
         let restic_cmd = ResticCommandExecutor::new(self.config.clone(), repo_url)?;
 
         let snapshots = restic_cmd
-            .snapshots(Some(&native_path.to_string_lossy()))
+            .snapshots()
             .await?;
         let count = snapshots.len();
+
+        // Extract actual path from first snapshot and cache it
+        let actual_native_path = if let Some(first_snapshot) = snapshots.first() {
+            if let Some(paths_array) = first_snapshot["paths"].as_array() {
+                if let Some(first_path) = paths_array.first() {
+                    if let Some(path_str) = first_path.as_str() {
+                        let actual_path = path_str.to_string();
+                        // Cache the mapping: repo_subpath -> actual_native_path
+                        if let Ok(mut cache) = self.path_cache.lock() {
+                            cache.insert(repo_subpath.to_string(), actual_path.clone());
+                        }
+                        PathBuf::from(actual_path)
+                    } else {
+                        PathBuf::from(format!("/unknown/{}", repo_subpath))
+                    }
+                } else {
+                    PathBuf::from(format!("/unknown/{}", repo_subpath))
+                }
+            } else {
+                PathBuf::from(format!("/unknown/{}", repo_subpath))
+            }
+        } else {
+            PathBuf::from(format!("/unknown/{}", repo_subpath))
+        };
 
         // Parse JSON snapshot data into structured format
         let snapshot_infos: Vec<SnapshotInfo> = snapshots
@@ -419,13 +453,22 @@ impl SnapshotCollector {
                 let id = s["short_id"].as_str()?.to_string();
                 Some(SnapshotInfo {
                     time,
-                    path: native_path.to_path_buf(),
+                    path: actual_native_path.clone(),
                     id,
                 })
             })
             .collect();
 
         Ok((count, snapshot_infos))
+    }
+
+    /// Get cached native path for a repository subpath (replaces s3_to_native_path)
+    pub fn get_cached_native_path(&self, repo_subpath: &str) -> Option<String> {
+        if let Ok(cache) = self.path_cache.lock() {
+            cache.get(repo_subpath).cloned()
+        } else {
+            None
+        }
     }
 }
 
