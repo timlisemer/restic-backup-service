@@ -1,8 +1,8 @@
 use crate::errors::BackupServiceError;
+use crate::shared::operations::RepositorySelectionItem;
 use chrono::{DateTime, Duration, Utc};
 use dialoguer::{Confirm, MultiSelect, Select};
 use indicatif::{ProgressBar, ProgressStyle};
-use std::path::PathBuf;
 use tracing::info;
 
 /// Handle category-based repository selection
@@ -27,20 +27,6 @@ pub struct HostSelection {
 #[derive(Debug, Clone)]
 pub struct RepositorySelection {
     pub selected_repos: Vec<RepositorySelectionItem>,
-}
-
-#[derive(Debug, Clone)]
-pub struct RepositorySelectionItem {
-    pub path: PathBuf,
-    pub repo_subpath: String,
-    pub category: String,
-    pub snapshots: Vec<SnapshotItem>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SnapshotItem {
-    pub id: String,
-    pub time: DateTime<Utc>,
 }
 
 /// Timestamp selection data
@@ -271,6 +257,7 @@ pub async fn confirm_action(prompt: &str, default: bool) -> Result<bool, BackupS
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::operations::SnapshotItem;
     use chrono::{DateTime, Utc};
     use std::path::PathBuf;
 

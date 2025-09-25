@@ -1,14 +1,34 @@
 use crate::config::Config;
 use crate::errors::BackupServiceError;
-use crate::helpers::{RepositoryInfo, RepositoryScanner, SnapshotInfo};
 use crate::repository::BackupRepo;
-use crate::shared::commands::S3CommandExecutor;
-use crate::shared::ui::RepositorySelectionItem;
+use crate::shared::commands::{ResticCommandExecutor, S3CommandExecutor};
+use crate::shared::constants::{
+    CATEGORY_DOCKER_VOLUME, CATEGORY_SYSTEM, CATEGORY_USER_HOME, DOCKER_VOLUMES_DIR,
+    HOME_DIR_PREFIX, ROOT_DIR_PREFIX,
+};
+use crate::shared::paths::PathMapper;
+use chrono::{DateTime, Utc};
+use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
+use tracing::{info, warn};
 
-// High-level operations manager for repository scanning and data collection
-pub struct RepositoryOperations {
-    config: Config,
-    scanner: RepositoryScanner,
+// Repository metadata information
+#[derive(Debug, Clone)]
+pub struct RepositoryInfo {
+    pub native_path: PathBuf,
+    pub repo_subpath: String,
+    pub category: String,
+}
+
+// Snapshot information
+#[derive(Debug, Clone, PartialEq)]
+pub struct SnapshotInfo {
+    pub time: DateTime<Utc>,
+    pub path: PathBuf,
+    pub id: String,
 }
 
 // Combined repository information with snapshot data
@@ -19,13 +39,42 @@ pub struct RepositoryData {
     pub snapshot_count: usize,
 }
 
+// UI-specific data structures (moved from ui.rs to eliminate duplication)
+#[derive(Debug, Clone)]
+pub struct RepositorySelectionItem {
+    pub path: PathBuf,
+    pub repo_subpath: String,
+    pub category: String,
+    pub snapshots: Vec<SnapshotItem>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SnapshotItem {
+    pub id: String,
+    pub time: DateTime<Utc>,
+}
+
+// Main repository operations manager with scanning capabilities
+pub struct RepositoryOperations {
+    config: Config,
+    snapshot_collector: SnapshotCollector,
+    s3_executor: S3CommandExecutor,
+}
+
+// Collects snapshot data from restic repositories
+#[derive(Clone)]
+pub struct SnapshotCollector {
+    config: Config,
+}
+
 impl RepositoryOperations {
     pub fn new(config: Config) -> Result<Self, BackupServiceError> {
-        let scanner = RepositoryScanner::new(config.clone())?;
-
+        let snapshot_collector = SnapshotCollector::new(config.clone())?;
+        let s3_executor = S3CommandExecutor::new(config.clone())?;
         Ok(Self {
             config,
-            scanner,
+            snapshot_collector,
+            s3_executor,
         })
     }
 
@@ -34,13 +83,260 @@ impl RepositoryOperations {
         &self,
         hostname: &str,
     ) -> Result<Vec<RepositoryData>, BackupServiceError> {
-        self.scanner.scan_repositories(hostname).await
+        self.scan_repositories(hostname).await
     }
 
-    // Retrieve available backup hosts from S3 storage
+    // Construct S3 path with optional base path prefix
+    fn build_s3_path(&self, hostname: &str, category: &str) -> Result<String, BackupServiceError> {
+        let base_path = self.config.s3_base_path()?;
+        if base_path.is_empty() {
+            Ok(format!("{}/{}", hostname, category))
+        } else {
+            Ok(format!("{}/{}/{}", base_path, hostname, category))
+        }
+    }
+
+    // List S3 directories using shared S3CommandExecutor
+    pub async fn list_s3_dirs(&self, s3_path: &str) -> Result<Vec<String>, BackupServiceError> {
+        self.s3_executor.list_directories(s3_path).await
+    }
+
+    /// Scan and collect all repositories for a hostname with true parallelization
+    pub async fn scan_repositories(
+        &self,
+        hostname: &str,
+    ) -> Result<Vec<RepositoryData>, BackupServiceError> {
+        let all_repo_infos = self.discover_all_repositories(hostname).await?;
+        let total_repos = all_repo_infos.len();
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        if total_repos == 0 {
+            info!("Scanning completed!");
+            return Ok(Vec::new());
+        }
+
+        info!("Found {} repositories to check", total_repos);
+
+        // Parallel execution: spawn concurrent tasks for repository checking
+        let mut tasks = Vec::new();
+
+        for repo_info in all_repo_infos {
+            let snapshot_collector = self.snapshot_collector.clone();
+            let counter_clone = counter.clone();
+
+            // Each repository is checked concurrently using tokio::spawn
+            let task = tokio::spawn(async move {
+                let current = counter_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                let native_path = &repo_info.native_path;
+                let repo_subpath = &repo_info.repo_subpath;
+
+                info!(
+                    "Checking ({}/{}) - {}",
+                    current,
+                    total_repos,
+                    native_path.display()
+                );
+
+                let result = snapshot_collector
+                    .get_snapshots(repo_subpath, native_path)
+                    .await;
+
+                match result {
+                    Ok((count, snapshots)) => {
+                        if count > 0 {
+                            info!("({}/{}) - {} snapshots found", current, total_repos, count);
+                            Ok::<Option<RepositoryData>, BackupServiceError>(Some(RepositoryData {
+                                info: repo_info,
+                                snapshots,
+                                snapshot_count: count,
+                            }))
+                        } else {
+                            warn!(
+                                "({}/{}) - No snapshots found for path: {}",
+                                current,
+                                total_repos,
+                                native_path.display()
+                            );
+                            Ok::<Option<RepositoryData>, BackupServiceError>(None)
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "({}/{}) - Failed to get snapshots for path '{}': {}",
+                            current,
+                            total_repos,
+                            native_path.display(),
+                            e
+                        );
+                        Ok::<Option<RepositoryData>, BackupServiceError>(None)
+                    }
+                }
+            });
+
+            tasks.push(task);
+        }
+
+        let mut results = Vec::new();
+        for task in tasks {
+            match task.await {
+                Ok(result) => results.push(result?),
+                Err(join_error) => {
+                    return Err(BackupServiceError::CommandFailed(format!(
+                        "Task join error: {}",
+                        join_error
+                    )))
+                }
+            }
+        }
+        let repos: Vec<RepositoryData> = results.into_iter().flatten().collect();
+
+        info!("Scanning completed!");
+        Ok(repos)
+    }
+
+    async fn discover_all_repositories(
+        &self,
+        hostname: &str,
+    ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
+        let mut all_repos = Vec::new();
+
+        all_repos.extend(
+            self.discover_repositories_by_category(hostname, "user_home")
+                .await?,
+        );
+        all_repos.extend(
+            self.discover_repositories_by_category(hostname, "docker_volume")
+                .await?,
+        );
+        all_repos.extend(
+            self.discover_repositories_by_category(hostname, "system")
+                .await?,
+        );
+
+        Ok(all_repos)
+    }
+
+    // Unified repository discovery for all categories
+    async fn discover_repositories_by_category(
+        &self,
+        hostname: &str,
+        category: &str,
+    ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
+        let category_path = self.build_s3_path(hostname, category)?;
+        info!("Scanning {} directories...", category);
+
+        let mut repos = Vec::new();
+
+        match category {
+            "user_home" => {
+                repos.extend(self.discover_user_home_repositories(&category_path).await?)
+            }
+            "docker_volume" => repos.extend(
+                self.discover_docker_volume_repositories(&category_path)
+                    .await?,
+            ),
+            "system" => repos.extend(self.discover_system_repositories(&category_path).await?),
+            _ => {
+                return Err(BackupServiceError::ConfigurationError(format!(
+                    "Unknown repository category: {}",
+                    category
+                )));
+            }
+        }
+
+        Ok(repos)
+    }
+
+    async fn discover_user_home_repositories(
+        &self,
+        category_path: &str,
+    ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
+        let mut repos = Vec::new();
+
+        if let Ok(users) = self.list_s3_dirs(category_path).await {
+            for user in users {
+                info!("Processing user: {}", user);
+                let user_path = format!("{}/{}", category_path, user);
+
+                if let Ok(subdirs) = self.list_s3_dirs(&user_path).await {
+                    for subdir in subdirs {
+                        let native_subdir = PathMapper::s3_to_native_path(&subdir)?;
+                        let native_path = PathBuf::from(format!(
+                            "{}/{}/{}",
+                            HOME_DIR_PREFIX, user, native_subdir
+                        ));
+                        let repo_subpath = format!("user_home/{}/{}", user, subdir);
+
+                        repos.push(self.create_repository_info(
+                            native_path,
+                            repo_subpath,
+                            CATEGORY_USER_HOME,
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(repos)
+    }
+
+    async fn discover_docker_volume_repositories(
+        &self,
+        category_path: &str,
+    ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
+        let mut repos = Vec::new();
+
+        if let Ok(volumes) = self.list_s3_dirs(category_path).await {
+            for volume in volumes {
+                let native_path = PathBuf::from(format!("{}/{}", DOCKER_VOLUMES_DIR, volume));
+                let repo_subpath = format!("docker_volume/{}", volume);
+
+                repos.push(self.create_repository_info(
+                    native_path,
+                    repo_subpath,
+                    CATEGORY_DOCKER_VOLUME,
+                ));
+            }
+        }
+
+        Ok(repos)
+    }
+
+    async fn discover_system_repositories(
+        &self,
+        category_path: &str,
+    ) -> Result<Vec<RepositoryInfo>, BackupServiceError> {
+        let mut repos = Vec::new();
+
+        if let Ok(paths) = self.list_s3_dirs(category_path).await {
+            for path in paths {
+                let native_path_str = PathMapper::s3_to_native_path(&path)?;
+                let native_path = PathBuf::from(format!("{}{}", ROOT_DIR_PREFIX, native_path_str));
+                let repo_subpath = format!("system/{}", path);
+
+                repos.push(self.create_repository_info(native_path, repo_subpath, CATEGORY_SYSTEM));
+            }
+        }
+
+        Ok(repos)
+    }
+
+    fn create_repository_info(
+        &self,
+        native_path: PathBuf,
+        repo_subpath: String,
+        category: &str,
+    ) -> RepositoryInfo {
+        RepositoryInfo {
+            native_path,
+            repo_subpath,
+            category: category.to_string(),
+        }
+    }
+
+    // Get available hosts from S3 storage
     pub async fn get_available_hosts(&self) -> Result<Vec<String>, BackupServiceError> {
-        let s3_executor = S3CommandExecutor::new(self.config.clone())?;
-        s3_executor.get_hosts().await
+        self.s3_executor.get_hosts().await
     }
 
     // Convert repository data to BackupRepo format
@@ -72,12 +368,11 @@ impl RepositoryOperations {
         &self,
         repo_data: Vec<RepositoryData>,
     ) -> Result<Vec<RepositorySelectionItem>, BackupServiceError> {
-        use crate::shared::ui::{RepositorySelectionItem, SnapshotItem};
-
         let mut repos = Vec::new();
         for repo_info in repo_data {
             if !repo_info.snapshots.is_empty() {
-                let snapshots = repo_info.snapshots
+                let snapshots = repo_info
+                    .snapshots
                     .into_iter()
                     .map(|s| SnapshotItem {
                         id: s.id,
@@ -94,6 +389,43 @@ impl RepositoryOperations {
             }
         }
         Ok(repos)
+    }
+}
+
+impl SnapshotCollector {
+    pub fn new(config: Config) -> Result<Self, BackupServiceError> {
+        Ok(Self { config })
+    }
+
+    // Retrieve and parse snapshot information from restic repository
+    pub async fn get_snapshots(
+        &self,
+        repo_subpath: &str,
+        native_path: &Path,
+    ) -> Result<(usize, Vec<SnapshotInfo>), BackupServiceError> {
+        let repo_url = self.config.get_repo_url(repo_subpath)?;
+        let restic_cmd = ResticCommandExecutor::new(self.config.clone(), repo_url)?;
+
+        let snapshots = restic_cmd
+            .snapshots(Some(&native_path.to_string_lossy()))
+            .await?;
+        let count = snapshots.len();
+
+        // Parse JSON snapshot data into structured format
+        let snapshot_infos: Vec<SnapshotInfo> = snapshots
+            .into_iter()
+            .filter_map(|s| {
+                let time = s["time"].as_str()?.parse::<DateTime<Utc>>().ok()?;
+                let id = s["short_id"].as_str()?.to_string();
+                Some(SnapshotInfo {
+                    time,
+                    path: native_path.to_path_buf(),
+                    id,
+                })
+            })
+            .collect();
+
+        Ok((count, snapshot_infos))
     }
 }
 

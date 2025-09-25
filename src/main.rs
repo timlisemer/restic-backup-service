@@ -4,7 +4,6 @@ use tracing::{info, warn};
 mod backup;
 mod config;
 mod errors;
-mod helpers;
 mod list;
 mod repository;
 mod restore;

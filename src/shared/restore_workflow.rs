@@ -1,11 +1,10 @@
 use crate::config::Config;
 use crate::errors::BackupServiceError;
-use crate::helpers::RepositoryScanner;
 use crate::shared::commands::{ResticCommandExecutor, S3CommandExecutor};
-use crate::shared::operations::RepositoryOperations;
+use crate::shared::operations::{RepositoryOperations, RepositorySelectionItem};
 use crate::shared::ui::{
     confirm_action, select_host, select_repositories, select_timestamp, HostSelection,
-    RepositorySelection, RepositorySelectionItem, TimestampSelection,
+    RepositorySelection, TimestampSelection,
 };
 use crate::utils::validate_credentials;
 use chrono::{DateTime, Duration, Utc};
@@ -71,7 +70,8 @@ impl RestoreWorkflow {
 
     /// Phase 1: Host selection
     async fn execute_host_selection_phase(&self) -> Result<HostSelection, BackupServiceError> {
-        let hosts = self.get_available_hosts().await?;
+        let s3_executor = S3CommandExecutor::new(self.config.clone())?;
+        let hosts = s3_executor.get_hosts().await?;
 
         if hosts.is_empty() {
             error!("No hosts found in backup repository");
@@ -93,12 +93,11 @@ impl RestoreWorkflow {
         hostname: &str,
     ) -> Result<Vec<RepositorySelectionItem>, BackupServiceError> {
         info!(host = %hostname, "Querying backups");
-        let scanner = RepositoryScanner::new(self.config.clone())?;
-
-        let repo_infos = scanner.scan_repositories(hostname).await?;
-        info!(repo_count = %repo_infos.len(), "Converting repository data for UI...");
-
         let operations = RepositoryOperations::new(self.config.clone())?;
+
+        let repo_infos = operations.scan_repositories(hostname).await?;
+        info!(repo_count = %repo_infos.len(), "Converting repository data for UI");
+
         let repos = operations.convert_to_selection_items(repo_infos)?;
 
         if repos.is_empty() {
@@ -366,12 +365,6 @@ impl RestoreWorkflow {
 
         fs::remove_dir_all(dest_dir).ok();
         Ok(())
-    }
-
-    /// Get available hosts using S3CommandExecutor
-    async fn get_available_hosts(&self) -> Result<Vec<String>, BackupServiceError> {
-        let s3_executor = S3CommandExecutor::new(self.config.clone())?;
-        s3_executor.get_hosts().await
     }
 
 }

@@ -1,5 +1,5 @@
 use crate::errors::BackupServiceError;
-use crate::helpers::SnapshotInfo;
+use crate::shared::operations::SnapshotInfo;
 use crate::repository::BackupRepo;
 use std::collections::HashMap;
 use tracing::info;
@@ -183,7 +183,7 @@ impl DisplayFormatter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::helpers::SnapshotInfo;
+    use crate::shared::operations::SnapshotInfo;
     use crate::repository::BackupRepo;
     use chrono::{DateTime, Utc};
     use std::path::PathBuf;
