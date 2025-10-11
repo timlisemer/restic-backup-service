@@ -9,7 +9,7 @@
   # Default package - will be overridden when used through flake
   defaultPackage = pkgs.rustPlatform.buildRustPackage rec {
     pname = "restic-backup-service";
-    version = "0.9.6";
+    version = "0.9.81";
     src = ./.;
     cargoLock = {
       lockFile = ./Cargo.lock;
@@ -31,11 +31,8 @@
     BACKUP_PATHS=${lib.concatStringsSep "," cfg.backupPaths}
     ${lib.optionalString (cfg.hostname != null) "BACKUP_HOSTNAME=${cfg.hostname}"}
   '';
-  # Optional inline secrets content supplied via Nix (overrides secretsFile when set)
-  envInlineFile =
-    if cfg.envContent == null
-    then null
-    else pkgs.writeText "restic-backup-inline.env" cfg.envContent;
+  # Fixed secrets path expected by both the unit and CLI
+  envInlineFile = "/etc/restic-backup.env";
 
   # Create a script that sources secrets and runs the backup
   backupScript = pkgs.writeShellScript "restic-backup-runner" ''
@@ -45,32 +42,17 @@
     set -a
     source ${envFile}
 
-    # Source inline secrets content; no file fallback
+    # Source secrets file at fixed path; no fallback
     if [ -s "${envInlineFile}" ]; then
+      # shellcheck disable=SC1091
       source "${envInlineFile}"
     else
-      echo "Error: Inline secrets content is empty" >&2
+      echo "Error: Cannot read secrets file ${envInlineFile}" >&2
       exit 1
     fi
 
     # Set individual secrets if provided (overrides secretsFile)
-    ${lib.optionalString (cfg.restic.passwordFile != null) ''
-      if [ -r "${cfg.restic.passwordFile}" ]; then
-        RESTIC_PASSWORD=$(cat "${cfg.restic.passwordFile}")
-      fi
-    ''}
-
-    ${lib.optionalString (cfg.aws.accessKeyIdFile != null) ''
-      if [ -r "${cfg.aws.accessKeyIdFile}" ]; then
-        AWS_ACCESS_KEY_ID=$(cat "${cfg.aws.accessKeyIdFile}")
-      fi
-    ''}
-
-    ${lib.optionalString (cfg.aws.secretAccessKeyFile != null) ''
-      if [ -r "${cfg.aws.secretAccessKeyFile}" ]; then
-        AWS_SECRET_ACCESS_KEY=$(cat "${cfg.aws.secretAccessKeyFile}")
-      fi
-    ''}
+    # No per-key file overrides
 
     # Set direct configuration values (overrides both files)
     ${lib.optionalString (cfg.restic.repoBase != null) ''
@@ -120,7 +102,7 @@ in {
     envContent = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
-      description = "Inline content of the secrets env file (overrides secretsFile when set).";
+      description = "(Deprecated) Inline env content no longer supported; provide /etc/restic-backup.env";
     };
 
     restic = {
@@ -209,7 +191,7 @@ in {
     envContent = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
-      description = "Inline content of the secrets env file (via sops placeholder).";
+      description = "(Deprecated) Provide /etc/restic-backup.env instead.";
     };
 
     backupTime = lib.mkOption {
@@ -228,7 +210,7 @@ in {
       lib.mkIf simple.enable {
         services.restic_backup.enable = true;
         services.restic_backup.backupPaths = simple.backupPaths;
-        services.restic_backup.envContent = simple.envContent;
+        # envContent ignored; expect /etc/restic-backup.env
         services.restic_backup.schedule = simple.backupTime;
       })
 
@@ -238,10 +220,7 @@ in {
           assertion = cfg.backupPaths != [];
           message = "services.restic_backup.backupPaths must not be empty";
         }
-        {
-          assertion = cfg.envContent != null;
-          message = "services.restic_backup.envContent must be set (supply via sops placeholder).";
-        }
+        # No inline; require the fixed file to exist at activation
       ];
 
       systemd.services.restic-backup = {
@@ -286,14 +265,6 @@ in {
       # Ensure the package is available in the system
       environment.systemPackages = [cfg.package];
 
-      # Make inline secrets available to CLI as /etc/restic-backup.env
-      environment.etc."restic-backup.env" = lib.mkIf (cfg.envContent != null) {
-        text = cfg.envContent;
-        mode = "0400";
-        user = "root";
-        group = "root";
-      };
-
       # Show a concise summary during activation so rebuild output is informative
       system.activationScripts.resticBackupSummary = let
         sysdAnalyze = "${pkgs.systemd}/bin/systemd-analyze";
@@ -304,10 +275,7 @@ in {
           if cfg.schedule == null
           then ""
           else cfg.schedule;
-        secretsMode =
-          if cfg.envContent != null
-          then "inline"
-          else "none";
+        secretsMode = "file";
       in {
         text = ''
           echo "[restic-backup] package: ${cfg.package.pname or "restic-backup-service"} ${cfg.package.version or "unknown"}"
@@ -325,19 +293,16 @@ in {
             echo "[restic-backup] timer disabled"
           fi
 
-          case "${secretsMode}" in
-            inline)
-              if [ -s "${envInlineFile}" ]; then
-                echo "[restic-backup] secrets: inline (readable)"
-              else
-                echo "[restic-backup] ERROR: inline secrets content is empty" >&2
-                exit 1
-              fi
-              ;;
-            none)
-              echo "[restic-backup] using individual secret files or env (no combined env file set)"
-              ;;
-          esac
+          if [ -s "${envInlineFile}" ]; then
+            echo "[restic-backup] secrets file: ${envInlineFile} (readable)"
+          else
+            if [ -e "${envInlineFile}" ]; then
+              echo "[restic-backup] ERROR: secrets file not readable: ${envInlineFile}" >&2
+            else
+              echo "[restic-backup] ERROR: secrets file missing: ${envInlineFile}" >&2
+            fi
+            exit 1
+          fi
         '';
       };
     })

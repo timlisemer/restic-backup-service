@@ -1,6 +1,8 @@
 use crate::errors::BackupServiceError;
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::fs::File;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +64,18 @@ impl Config {
         if let Ok(v) = env::var(key) {
             return Ok(v);
         }
+        // Early permission check for the system env file so non-root gets a clear error
+        let sys_env_path = "/etc/restic-backup.env";
+        if std::path::Path::new(sys_env_path).exists() {
+            if let Err(e) = File::open(sys_env_path) {
+                if e.kind() == ErrorKind::PermissionDenied {
+                    return Err(BackupServiceError::ConfigurationError(format!(
+                        "Secrets file not readable: {} (permission denied)",
+                        sys_env_path
+                    )));
+                }
+            }
+        }
         if let Some(v) = Self::read_key_from_env_files(key) {
             return Ok(v);
         }
@@ -99,7 +113,7 @@ impl Config {
                 continue;
             }
             if let Some((k, v)) = line.split_once('=') {
-                if k.trim() == want_key {
+                if k.trim().eq_ignore_ascii_case(want_key) {
                     let mut value = v.trim().to_string();
                     // Remove surrounding quotes if present
                     if (value.starts_with('"') && value.ends_with('"'))
@@ -434,9 +448,8 @@ mod tests {
         let test_paths = "/home/user/Projects,/home/user/Downloads,/home/user/.config,/home/user/.steam,/home/user/.local/share/Paradox Interactive,/home/user/.local/share/Steam/steamapps/common/My Game";
         env::set_var("BACKUP_PATHS", test_paths);
 
-        // Test parsing
-        let parsed_paths: Vec<PathBuf> = env::var("BACKUP_PATHS")
-            .unwrap_or_default()
+        // Test parsing (parse the test string directly to avoid env interference)
+        let parsed_paths: Vec<PathBuf> = test_paths
             .split(',')
             .filter(|s| !s.is_empty())
             .map(|s| PathBuf::from(s.trim().trim_end_matches('/')))
@@ -457,9 +470,8 @@ mod tests {
         );
 
         // Test empty paths filtering
-        env::set_var("BACKUP_PATHS", "/path1,,/path2,  ,/path3");
-        let filtered_paths: Vec<PathBuf> = env::var("BACKUP_PATHS")
-            .unwrap_or_default()
+        let test_paths2 = "/path1,,/path2,  ,/path3";
+        let filtered_paths: Vec<PathBuf> = test_paths2
             .split(',')
             .filter(|s| !s.trim().is_empty())
             .map(|s| PathBuf::from(s.trim().trim_end_matches('/')))
@@ -470,8 +482,7 @@ mod tests {
         assert_eq!(filtered_paths[1], PathBuf::from("/path2"));
         assert_eq!(filtered_paths[2], PathBuf::from("/path3"));
 
-        // Clean up
-        env::remove_var("BACKUP_PATHS");
+        // No env cleanup needed
         Ok(())
     }
 
@@ -483,9 +494,8 @@ mod tests {
         let test_paths_with_slashes = "/home/user/Documents/,/home/user/.local/share/Paradox Interactive/,/home/user/Projects,/home/user/.config/";
         env::set_var("BACKUP_PATHS", test_paths_with_slashes);
 
-        // Use the actual config parsing logic
-        let parsed_paths: Vec<PathBuf> = env::var("BACKUP_PATHS")
-            .unwrap_or_default()
+        // Use the actual parsing logic on the test string directly
+        let parsed_paths: Vec<PathBuf> = test_paths_with_slashes
             .split(',')
             .filter(|s| !s.is_empty())
             .map(|s| PathBuf::from(s.trim().trim_end_matches('/')))
@@ -501,8 +511,7 @@ mod tests {
         assert_eq!(parsed_paths[2], PathBuf::from("/home/user/Projects")); // No slash to trim
         assert_eq!(parsed_paths[3], PathBuf::from("/home/user/.config"));
 
-        // Clean up
-        env::remove_var("BACKUP_PATHS");
+        // No env cleanup needed
         Ok(())
     }
 }
