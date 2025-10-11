@@ -300,6 +300,7 @@ in {
       # Show a concise summary during activation so rebuild output is informative
       system.activationScripts.resticBackupSummary = let
         sysdAnalyze = "${pkgs.systemd}/bin/systemd-analyze";
+        sedBin = "${pkgs.gnused}/bin/sed";
         pathsCount = builtins.length cfg.backupPaths;
         preview = lib.concatMapStringsSep ", " (p: p) (lib.take 5 cfg.backupPaths);
         scheduleOrEmpty =
@@ -316,10 +317,11 @@ in {
           if [ -n "${scheduleOrEmpty}" ]; then
             echo "[restic-backup] timer OnCalendar: ${cfg.schedule}"
             if ${sysdAnalyze} calendar "${cfg.schedule}" >/dev/null 2>&1; then
-              next_line="$(${sysdAnalyze} calendar --iterations=1 "${cfg.schedule}" 2>/dev/null | sed -n 's/^  Next elapse: //p' | head -1)"
+              next_line="$(${sysdAnalyze} calendar --iterations=1 "${cfg.schedule}" 2>/dev/null | ${sedBin} -n 's/^  Next elapse: //p' | head -1)"
               [ -n "$next_line" ] && echo "[restic-backup] next elapse: $next_line"
             else
-              echo "[restic-backup] WARNING: invalid OnCalendar expression: ${cfg.schedule}" >&2
+              echo "[restic-backup] ERROR: invalid OnCalendar expression: ${cfg.schedule}" >&2
+              exit 1
             fi
           else
             echo "[restic-backup] timer disabled"
@@ -329,7 +331,8 @@ in {
             if [ -r "${secretsOrEmpty}" ]; then
               echo "[restic-backup] secrets file: ${secretsOrEmpty} (readable)"
             else
-              echo "[restic-backup] WARNING: secrets file not readable: ${secretsOrEmpty}" >&2
+              echo "[restic-backup] ERROR: secrets file not readable: ${secretsOrEmpty}" >&2
+              exit 1
             fi
           else
             echo "[restic-backup] using individual secret files or env (no combined env file set)"
