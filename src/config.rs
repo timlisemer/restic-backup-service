@@ -23,14 +23,14 @@ impl Config {
         // Avoid dotenv variable substitution issues - try .env file first, then env var
         let restic_password =
             Self::read_password_from_env_file().or_else(|_| env::var("RESTIC_PASSWORD"))?;
-        let restic_repo_base = env::var("RESTIC_REPO_BASE")?;
-        let aws_access_key_id = env::var("AWS_ACCESS_KEY_ID")?;
-        let aws_secret_access_key = env::var("AWS_SECRET_ACCESS_KEY")?;
+        let restic_repo_base = Self::required_env("RESTIC_REPO_BASE")?;
+        let aws_access_key_id = Self::required_env("AWS_ACCESS_KEY_ID")?;
+        let aws_secret_access_key = Self::required_env("AWS_SECRET_ACCESS_KEY")?;
 
         let aws_default_region =
             env::var("AWS_DEFAULT_REGION").unwrap_or_else(|_| "auto".to_string());
 
-        let aws_s3_endpoint = env::var("AWS_S3_ENDPOINT")?;
+        let aws_s3_endpoint = Self::required_env("AWS_S3_ENDPOINT")?;
 
         let backup_paths = env::var("BACKUP_PATHS")
             .unwrap_or_default()
@@ -55,6 +55,16 @@ impl Config {
             aws_s3_endpoint,
             backup_paths,
             hostname,
+        })
+    }
+
+    // Provide a clearer error when required env vars are missing
+    fn required_env(key: &str) -> Result<String, BackupServiceError> {
+        env::var(key).map_err(|_| {
+            BackupServiceError::ConfigurationError(format!(
+                "Missing required environment variable: {}.\n\nExpected env file (one per line):\n  RESTIC_PASSWORD=...\n  RESTIC_REPO_BASE=s3:https://<endpoint>/<bucket>[/optional/base]\n  AWS_ACCESS_KEY_ID=...\n  AWS_SECRET_ACCESS_KEY=...\n  AWS_DEFAULT_REGION=auto\n  AWS_S3_ENDPOINT=https://<endpoint>\n  BACKUP_PATHS=/path/one,/path/two (optional; can also be set via Nix)",
+                key
+            ))
         })
     }
 
@@ -471,7 +481,10 @@ mod tests {
         assert_eq!(parsed_paths.len(), 4);
         // Verify trailing slashes are removed
         assert_eq!(parsed_paths[0], PathBuf::from("/home/user/Documents"));
-        assert_eq!(parsed_paths[1], PathBuf::from("/home/user/.local/share/Paradox Interactive"));
+        assert_eq!(
+            parsed_paths[1],
+            PathBuf::from("/home/user/.local/share/Paradox Interactive")
+        );
         assert_eq!(parsed_paths[2], PathBuf::from("/home/user/Projects")); // No slash to trim
         assert_eq!(parsed_paths[3], PathBuf::from("/home/user/.config"));
 

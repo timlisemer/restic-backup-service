@@ -9,7 +9,7 @@
   # Default package - will be overridden when used through flake
   defaultPackage = pkgs.rustPlatform.buildRustPackage rec {
     pname = "restic-backup-service";
-    version = "0.1.0";
+    version = "0.9.3";
     src = ./.;
     cargoLock = {
       lockFile = ./Cargo.lock;
@@ -254,8 +254,9 @@ in {
 
       systemd.services.restic-backup = {
         description = "Restic backup service";
-        after = ["network-online.target"];
-        wants = ["network-online.target"];
+        after = ["network-online.target" "sops-install-secrets.service"];
+        wants = ["network-online.target" "sops-install-secrets.service"];
+        requires = ["sops-install-secrets.service"];
 
         # Refuse to start if a combined secrets env file is configured but not readable
         unitConfig = lib.mkIf (cfg.secretsFile != null) {
@@ -300,8 +301,9 @@ in {
       # Show a concise summary during activation so rebuild output is informative
       system.activationScripts.resticBackupSummary = let
         sysdAnalyze = "${pkgs.systemd}/bin/systemd-analyze";
+        sedBin = "${pkgs.gnused}/bin/sed";
         pathsCount = builtins.length cfg.backupPaths;
-        preview = lib.concatMapStringsSep ", " (p: p) (lib.take 5 cfg.backupPaths);
+        allList = lib.concatStringsSep ", " cfg.backupPaths;
         scheduleOrEmpty =
           if cfg.schedule == null
           then ""
@@ -312,14 +314,16 @@ in {
           else cfg.secretsFile;
       in {
         text = ''
-          echo "[restic-backup] paths configured: ${toString pathsCount}${lib.optionalString (preview != "") " ("}${preview}${lib.optionalString (preview != "") ")"}"
+          echo "[restic-backup] package: ${cfg.package.pname or "restic-backup-service"} ${cfg.package.version or "unknown"}"
+          echo "[restic-backup] paths configured: ${toString pathsCount} (${allList})"
           if [ -n "${scheduleOrEmpty}" ]; then
-            echo "[restic-backup] timer OnCalendar: ${cfg.schedule}"
+            echo "[restic-backup] timer OnCalendar: ${cfg.schedule} (systemd calendar)"
             if ${sysdAnalyze} calendar "${cfg.schedule}" >/dev/null 2>&1; then
-              next_line="$(${sysdAnalyze} calendar --iterations=1 "${cfg.schedule}" 2>/dev/null | sed -n 's/^  Next elapse: //p' | head -1)"
+              next_line="$(${sysdAnalyze} calendar --iterations=1 "${cfg.schedule}" 2>/dev/null | ${sedBin} -n 's/^  Next elapse: //p' | head -1)"
               [ -n "$next_line" ] && echo "[restic-backup] next elapse: $next_line"
             else
-              echo "[restic-backup] WARNING: invalid OnCalendar expression: ${cfg.schedule}" >&2
+              echo "[restic-backup] ERROR: invalid OnCalendar expression: ${cfg.schedule}" >&2
+              exit 1
             fi
           else
             echo "[restic-backup] timer disabled"
@@ -329,12 +333,23 @@ in {
             if [ -r "${secretsOrEmpty}" ]; then
               echo "[restic-backup] secrets file: ${secretsOrEmpty} (readable)"
             else
-              echo "[restic-backup] WARNING: secrets file not readable: ${secretsOrEmpty}" >&2
+              echo "[restic-backup] ERROR: secrets file not readable: ${secretsOrEmpty}" >&2
+              echo "[restic-backup] Expected env file format (one per line):" >&2
+              echo "  RESTIC_PASSWORD=..." >&2
+              echo "  RESTIC_REPO_BASE=s3:https://<endpoint>/<bucket>[/optional/base]" >&2
+              echo "  AWS_ACCESS_KEY_ID=..." >&2
+              echo "  AWS_SECRET_ACCESS_KEY=..." >&2
+              echo "  AWS_DEFAULT_REGION=auto" >&2
+              echo "  AWS_S3_ENDPOINT=https://<endpoint>" >&2
+              echo "  BACKUP_PATHS=/path/one,/path/two (optional; can be set via Nix)" >&2
+              exit 1
             fi
           else
             echo "[restic-backup] using individual secret files or env (no combined env file set)"
           fi
         '';
+        # Ensure this runs after sops-nix installs secrets
+        deps = ["sops-install-secrets"];
       };
     })
   ];
