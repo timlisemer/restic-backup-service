@@ -9,7 +9,7 @@
   # Default package - will be overridden when used through flake
   defaultPackage = pkgs.rustPlatform.buildRustPackage rec {
     pname = "restic-backup-service";
-    version = "0.9.3";
+    version = "0.9.5";
     src = ./.;
     cargoLock = {
       lockFile = ./Cargo.lock;
@@ -31,6 +31,11 @@
     BACKUP_PATHS=${lib.concatStringsSep "," cfg.backupPaths}
     ${lib.optionalString (cfg.hostname != null) "BACKUP_HOSTNAME=${cfg.hostname}"}
   '';
+  # Optional inline secrets content supplied via Nix (overrides secretsFile when set)
+  envInlineFile =
+    if cfg.envContent == null
+    then null
+    else pkgs.writeText "restic-backup-inline.env" cfg.envContent;
 
   # Create a script that sources secrets and runs the backup
   backupScript = pkgs.writeShellScript "restic-backup-runner" ''
@@ -40,15 +45,13 @@
     set -a
     source ${envFile}
 
-    # Source secrets file if provided
-    ${lib.optionalString (cfg.secretsFile != null) ''
-      if [ -r "${cfg.secretsFile}" ]; then
-        source "${cfg.secretsFile}"
-      else
-        echo "Error: Cannot read secrets file ${cfg.secretsFile}" >&2
-        exit 1
-      fi
-    ''}
+    # Source inline secrets content; no file fallback
+    if [ -s "${envInlineFile}" ]; then
+      source "${envInlineFile}"
+    else
+      echo "Error: Inline secrets content is empty" >&2
+      exit 1
+    fi
 
     # Set individual secrets if provided (overrides secretsFile)
     ${lib.optionalString (cfg.restic.passwordFile != null) ''
@@ -114,11 +117,10 @@ in {
       description = "Custom hostname for backups (defaults to system hostname)";
     };
 
-    secretsFile = lib.mkOption {
-      type = lib.types.nullOr lib.types.path;
+    envContent = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
       default = null;
-      example = lib.literalExpression "config.sops.secrets.restic-env.path";
-      description = "Path to file containing all restic and AWS secrets (environment file format)";
+      description = "Inline content of the secrets env file (overrides secretsFile when set).";
     };
 
     restic = {
@@ -204,11 +206,10 @@ in {
       example = ["/home/user/Documents" "/home/user/.config"];
     };
 
-    secretKeyFile = lib.mkOption {
-      type = lib.types.nullOr lib.types.path;
+    envContent = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
       default = null;
-      description = "Path to env-style secrets file (managed externally, e.g., sops).";
-      example = lib.literalExpression "config.sops.secrets.restic_environment.path";
+      description = "Inline content of the secrets env file (via sops placeholder).";
     };
 
     backupTime = lib.mkOption {
@@ -227,7 +228,7 @@ in {
       lib.mkIf simple.enable {
         services.restic_backup.enable = true;
         services.restic_backup.backupPaths = simple.backupPaths;
-        services.restic_backup.secretsFile = simple.secretKeyFile;
+        services.restic_backup.envContent = simple.envContent;
         services.restic_backup.schedule = simple.backupTime;
       })
 
@@ -238,30 +239,17 @@ in {
           message = "services.restic_backup.backupPaths must not be empty";
         }
         {
-          assertion =
-            cfg.secretsFile
-            != null
-            || (
-              cfg.restic.passwordFile
-              != null
-              && cfg.aws.accessKeyIdFile != null
-              && cfg.aws.secretAccessKeyFile != null
-              && (cfg.restic.repoBase != null || cfg.aws.s3Endpoint != null)
-            );
-          message = "services.restic_backup requires either secretsFile or individual secret files for all required credentials";
+          assertion = cfg.envContent != null;
+          message = "services.restic_backup.envContent must be set (supply via sops placeholder).";
         }
       ];
 
       systemd.services.restic-backup = {
         description = "Restic backup service";
-        after = ["network-online.target" "sops-install-secrets.service"];
-        wants = ["network-online.target" "sops-install-secrets.service"];
-        requires = ["sops-install-secrets.service"];
+        after = ["network-online.target"];
+        wants = ["network-online.target"];
 
-        # Refuse to start if a combined secrets env file is configured but not readable
-        unitConfig = lib.mkIf (cfg.secretsFile != null) {
-          ConditionPathIsReadable = cfg.secretsFile;
-        };
+        # No file conditions; envContent is required and validated
 
         serviceConfig = {
           Type = "oneshot";
@@ -308,10 +296,10 @@ in {
           if cfg.schedule == null
           then ""
           else cfg.schedule;
-        secretsOrEmpty =
-          if cfg.secretsFile == null
-          then ""
-          else cfg.secretsFile;
+        secretsMode =
+          if cfg.envContent != null
+          then "inline"
+          else "none";
       in {
         text = ''
           echo "[restic-backup] package: ${cfg.package.pname or "restic-backup-service"} ${cfg.package.version or "unknown"}"
@@ -329,27 +317,20 @@ in {
             echo "[restic-backup] timer disabled"
           fi
 
-          if [ -n "${secretsOrEmpty}" ]; then
-            if [ -r "${secretsOrEmpty}" ]; then
-              echo "[restic-backup] secrets file: ${secretsOrEmpty} (readable)"
-            else
-              echo "[restic-backup] ERROR: secrets file not readable: ${secretsOrEmpty}" >&2
-              echo "[restic-backup] Expected env file format (one per line):" >&2
-              echo "  RESTIC_PASSWORD=..." >&2
-              echo "  RESTIC_REPO_BASE=s3:https://<endpoint>/<bucket>[/optional/base]" >&2
-              echo "  AWS_ACCESS_KEY_ID=..." >&2
-              echo "  AWS_SECRET_ACCESS_KEY=..." >&2
-              echo "  AWS_DEFAULT_REGION=auto" >&2
-              echo "  AWS_S3_ENDPOINT=https://<endpoint>" >&2
-              echo "  BACKUP_PATHS=/path/one,/path/two (optional; can be set via Nix)" >&2
-              exit 1
-            fi
-          else
-            echo "[restic-backup] using individual secret files or env (no combined env file set)"
-          fi
+          case "${secretsMode}" in
+            inline)
+              if [ -s "${envInlineFile}" ]; then
+                echo "[restic-backup] secrets: inline (readable)"
+              else
+                echo "[restic-backup] ERROR: inline secrets content is empty" >&2
+                exit 1
+              fi
+              ;;
+            none)
+              echo "[restic-backup] using individual secret files or env (no combined env file set)"
+              ;;
+          esac
         '';
-        # Ensure this runs after sops-nix installs secrets
-        deps = ["sops-install-secrets"];
       };
     })
   ];
