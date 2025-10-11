@@ -42,6 +42,7 @@ src/
 ## Technical Highlights
 
 ### Path Categorization System
+
 The application includes a sophisticated path categorization system that handles real-world complexity:
 
 ```rust
@@ -54,10 +55,13 @@ The application includes a sophisticated path categorization system that handles
 This system has extensive test coverage (900+ lines) for edge cases including whitespace, special characters, and complex gaming/development directory structures.
 
 ### Concurrent Repository Scanning
+
 Uses `tokio::spawn` for true parallelization when scanning repositories with proper progress tracking and error handling. The `RepositoryOperations` orchestrates concurrent scanning while `SnapshotCollector` caches path mappings.
 
 ### Interactive Restoration Workflow
+
 The restore process is implemented as a 5-phase workflow:
+
 1. Host selection from available backups
 2. Concurrent repository discovery and scanning
 3. Repository selection (category-based or individual)
@@ -65,14 +69,17 @@ The restore process is implemented as a 5-phase workflow:
 5. Restoration with copy/move options to original locations
 
 ### S3 Provider Support
+
 Includes intelligent S3 URL parsing that supports multiple providers (AWS S3, Cloudflare R2, MinIO) with automatic endpoint extraction and credential management.
 
 ### Data Flow Architecture
+
 The application follows clear data flows: S3 bucket scanning → concurrent repository discovery → snapshot collection → UI presentation. Native filesystem paths are mapped through `PathMapper::path_to_repo_subpath` to create the S3 repository structure.
 
 ## Installation
 
 ### For Users
+
 ```bash
 git clone https://github.com/timlisemer/restic-backup-service.git
 cd restic-backup-service
@@ -80,6 +87,7 @@ cargo build --release
 ```
 
 ### For Development
+
 ```bash
 # Run tests
 cargo test
@@ -94,6 +102,7 @@ cargo check && cargo clippy
 ## Configuration
 
 Create a `.env` file or initialize with:
+
 ```bash
 # Using built binary
 ./restic-backup-service init
@@ -103,6 +112,7 @@ cargo run -- init
 ```
 
 Example configuration:
+
 ```env
 RESTIC_PASSWORD=your_password
 RESTIC_REPO_BASE=s3:https://account-id.r2.cloudflarestorage.com/bucket/restic
@@ -116,6 +126,7 @@ BACKUP_PATHS=/home/user/Documents,/home/user/.config,/home/user/.local/share/Ste
 ## Usage
 
 ### Backup Operations
+
 ```bash
 # Backup all configured paths + auto-discovered Docker volumes
 ./restic-backup-service run
@@ -125,6 +136,7 @@ BACKUP_PATHS=/home/user/Documents,/home/user/.config,/home/user/.local/share/Ste
 ```
 
 ### List Backups
+
 ```bash
 # Human-readable categorized output
 ./restic-backup-service list
@@ -137,6 +149,7 @@ BACKUP_PATHS=/home/user/Documents,/home/user/.config,/home/user/.local/share/Ste
 ```
 
 ### Interactive Restoration
+
 ```bash
 # Launch interactive restore wizard
 ./restic-backup-service restore
@@ -146,6 +159,7 @@ BACKUP_PATHS=/home/user/Documents,/home/user/.config,/home/user/.local/share/Ste
 ```
 
 ### Repository Analysis
+
 ```bash
 # Check storage usage for a path
 ./restic-backup-service size /home/user/Documents
@@ -221,6 +235,7 @@ services.restic_backup = {
 #### Option 1: Single secrets file (recommended for sops-nix)
 
 Create a secrets file with all required variables:
+
 ```bash
 # In your secrets file (e.g., managed by sops-nix)
 RESTIC_PASSWORD=your_password
@@ -231,6 +246,7 @@ AWS_S3_ENDPOINT=https://account-id.r2.cloudflarestorage.com
 ```
 
 Then reference it in your NixOS configuration:
+
 ```nix
 services.restic_backup = {
   enable = true;
@@ -352,12 +368,12 @@ restic-env: |
 
 ## Requirements
 
-- Rust 1.70+
 - `restic` command-line tool
 - `aws` CLI tool
 - S3-compatible storage
 
 ### Key Dependencies
+
 - **tokio**: Async runtime and concurrency
 - **clap**: CLI argument parsing
 - **tracing**: Structured logging with file rotation
@@ -367,6 +383,7 @@ restic-env: |
 ## Error Handling and Reliability
 
 The application includes comprehensive error handling with:
+
 - **Structured Errors**: Uses `thiserror` with intelligent stderr parsing in `BackupServiceError::from_stderr`
 - **Context Wrapping**: Validation context and operation-specific error types
 - **Graceful Degradation**: Operations continue when individual components fail
@@ -374,19 +391,3 @@ The application includes comprehensive error handling with:
 - **Path Validation**: Existence checking before backup operations
 
 Logging is implemented with `tracing` and includes file rotation to `./logs/restic-backup.log`.
-
-## Performance
-
-- Concurrent repository scanning with progress tracking using `tokio::spawn`
-- Memory-efficient streaming operations
-- Fast startup time for most commands
-- Handles complex directory structures and multiple repositories efficiently
-
-## Why Rust
-
-This project was an exercise in building a production-quality CLI application in Rust, focusing on:
-- Type safety and error handling
-- Async/await patterns with tokio
-- Modular architecture with clear separation of concerns
-- Comprehensive testing including edge cases
-- Performance optimization through parallelization
