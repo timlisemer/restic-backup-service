@@ -9,7 +9,7 @@
   # Default package - will be overridden when used through flake
   defaultPackage = pkgs.rustPlatform.buildRustPackage rec {
     pname = "restic-backup-service";
-    version = "0.9.5";
+    version = "0.9.6";
     src = ./.;
     cargoLock = {
       lockFile = ./Cargo.lock;
@@ -285,6 +285,14 @@ in {
 
       # Ensure the package is available in the system
       environment.systemPackages = [cfg.package];
+
+      # Make inline secrets available to CLI as /etc/restic-backup.env
+      environment.etc."restic-backup.env" = lib.mkIf (cfg.envContent != null) {
+        text = cfg.envContent;
+        mode = "0400";
+        user = "root";
+        group = "root";
+      };
 
       # Show a concise summary during activation so rebuild output is informative
       system.activationScripts.resticBackupSummary = let
