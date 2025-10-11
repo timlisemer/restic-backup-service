@@ -12,7 +12,13 @@ mod utils;
 
 #[derive(Parser)]
 #[command(name = "restic-backup-service")]
-#[command(about = "A Rust-based restic backup service for S3 storage", long_about = None)]
+#[command(
+    about = concat!(
+        "A Rust-based restic backup service for S3 storage ",
+        "(Version: ", env!("CARGO_PKG_VERSION"), ")"
+    ),
+    long_about = None
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

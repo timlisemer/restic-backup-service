@@ -1,6 +1,9 @@
-{ config, lib, pkgs, ... }:
-
-let
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}: let
   cfg = config.services.restic_backup;
 
   # Default package - will be overridden when used through flake
@@ -12,13 +15,13 @@ let
       lockFile = ./Cargo.lock;
     };
 
-    nativeBuildInputs = with pkgs; [ pkg-config makeWrapper ];
-    buildInputs = with pkgs; [ openssl ];
-    propagatedBuildInputs = with pkgs; [ restic awscli2 ];
+    nativeBuildInputs = with pkgs; [pkg-config makeWrapper];
+    buildInputs = with pkgs; [openssl];
+    propagatedBuildInputs = with pkgs; [restic awscli2];
 
     postInstall = ''
       wrapProgram $out/bin/restic-backup-service \
-        --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.restic pkgs.awscli2 ]}
+        --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.restic pkgs.awscli2]}
     '';
   };
 
@@ -88,7 +91,6 @@ let
     # Run the backup
     exec "${cfg.package}/bin/restic-backup-service" run ${lib.concatStringsSep " " cfg.extraArgs}
   '';
-
 in {
   options.services.restic_backup = {
     enable = lib.mkEnableOption "Restic backup service";
@@ -101,8 +103,8 @@ in {
 
     backupPaths = lib.mkOption {
       type = lib.types.listOf lib.types.str;
-      default = [ ];
-      example = [ "/home/user/Documents" "/home/user/.config" ];
+      default = [];
+      example = ["/home/user/Documents" "/home/user/.config"];
       description = "List of paths to backup";
     };
 
@@ -173,8 +175,8 @@ in {
 
     extraArgs = lib.mkOption {
       type = lib.types.listOf lib.types.str;
-      default = [ ];
-      example = [ "--verbose" ];
+      default = [];
+      example = ["--verbose"];
       description = "Additional arguments to pass to restic-backup-service";
     };
 
@@ -191,61 +193,149 @@ in {
     };
   };
 
-  config = lib.mkIf cfg.enable {
-    assertions = [
-      {
-        assertion = cfg.backupPaths != [ ];
-        message = "services.restic_backup.backupPaths must not be empty";
-      }
-      {
-        assertion = cfg.secretsFile != null || (
-          cfg.restic.passwordFile != null &&
-          cfg.aws.accessKeyIdFile != null &&
-          cfg.aws.secretAccessKeyFile != null &&
-          (cfg.restic.repoBase != null || cfg.aws.s3Endpoint != null)
-        );
-        message = "services.restic_backup requires either secretsFile or individual secret files for all required credentials";
-      }
-    ];
+  # Thin wrapper interface to match user's desired config shape
+  options.services."restic-backup-service" = {
+    enable = lib.mkEnableOption "Simple restic-backup-service wrapper (maps to services.restic_backup)";
 
-    systemd.services.restic-backup = {
-      description = "Restic backup service";
-      after = [ "network-online.target" ];
-      wants = [ "network-online.target" ];
-
-      serviceConfig = {
-        Type = "oneshot";
-        User = cfg.user;
-        Group = cfg.group;
-        ExecStart = "${backupScript}";
-
-        # Security settings
-        PrivateTmp = true;
-        ProtectSystem = "strict";
-        ProtectHome = false; # Need access to backup paths
-        ReadWritePaths = [ "/tmp" "/var/log" ];
-        NoNewPrivileges = true;
-
-        # Logging
-        StandardOutput = "journal";
-        StandardError = "journal";
-        SyslogIdentifier = "restic-backup";
-      };
+    backupPaths = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [];
+      description = "List of native filesystem paths to back up.";
+      example = ["/home/user/Documents" "/home/user/.config"];
     };
 
-    # Optional systemd timer for scheduled backups
-    systemd.timers.restic-backup = lib.mkIf (cfg.schedule != null) {
-      description = "Timer for restic backup service";
-      wantedBy = [ "timers.target" ];
-
-      timerConfig = {
-        OnCalendar = cfg.schedule;
-        Persistent = true;
-        RandomizedDelaySec = "5m";
-      };
+    secretKeyFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = "Path to env-style secrets file (managed externally, e.g., sops).";
+      example = lib.literalExpression "config.sops.secrets.restic_environment.path";
     };
 
-    # Ensure the package is available in the system
-    environment.systemPackages = [ cfg.package ];
+    backupTime = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "OnCalendar string (e.g., \"06:30\", \"daily\") or null to disable timer.";
+      example = "06:30";
+    };
   };
+
+  config = lib.mkMerge [
+    # Map simplified interface onto services.restic_backup
+    (let
+      simple = config.services."restic-backup-service";
+    in
+      lib.mkIf simple.enable {
+        services.restic_backup.enable = true;
+        services.restic_backup.backupPaths = simple.backupPaths;
+        services.restic_backup.secretsFile = simple.secretKeyFile;
+        services.restic_backup.schedule = simple.backupTime;
+      })
+
+    (lib.mkIf cfg.enable {
+      assertions = [
+        {
+          assertion = cfg.backupPaths != [];
+          message = "services.restic_backup.backupPaths must not be empty";
+        }
+        {
+          assertion =
+            cfg.secretsFile
+            != null
+            || (
+              cfg.restic.passwordFile
+              != null
+              && cfg.aws.accessKeyIdFile != null
+              && cfg.aws.secretAccessKeyFile != null
+              && (cfg.restic.repoBase != null || cfg.aws.s3Endpoint != null)
+            );
+          message = "services.restic_backup requires either secretsFile or individual secret files for all required credentials";
+        }
+      ];
+
+      systemd.services.restic-backup = {
+        description = "Restic backup service";
+        after = ["network-online.target"];
+        wants = ["network-online.target"];
+
+        # Refuse to start if a combined secrets env file is configured but not readable
+        unitConfig = lib.mkIf (cfg.secretsFile != null) {
+          ConditionPathIsReadable = cfg.secretsFile;
+        };
+
+        serviceConfig = {
+          Type = "oneshot";
+          User = cfg.user;
+          Group = cfg.group;
+          ExecStart = "${backupScript}";
+
+          # Security settings
+          PrivateTmp = true;
+          ProtectSystem = "strict";
+          ProtectHome = false; # Need access to backup paths
+          ReadWritePaths = ["/tmp" "/var/log"];
+          NoNewPrivileges = true;
+
+          # Logging
+          StandardOutput = "journal";
+          StandardError = "journal";
+          SyslogIdentifier = "restic-backup";
+        };
+      };
+
+      # Optional systemd timer for scheduled backups
+      systemd.timers.restic-backup = lib.mkIf (cfg.schedule != null) {
+        description = "Timer for restic backup service";
+        wantedBy = ["timers.target"];
+
+        timerConfig = {
+          OnCalendar = cfg.schedule;
+          Persistent = true;
+          RandomizedDelaySec = "5m";
+        };
+      };
+
+      # Ensure the package is available in the system
+      environment.systemPackages = [cfg.package];
+
+      # Show a concise summary during activation so rebuild output is informative
+      system.activationScripts.resticBackupSummary = let
+        sysdAnalyze = "${pkgs.systemd}/bin/systemd-analyze";
+        pathsCount = builtins.length cfg.backupPaths;
+        preview = lib.concatMapStringsSep ", " (p: p) (lib.take 5 cfg.backupPaths);
+        scheduleOrEmpty =
+          if cfg.schedule == null
+          then ""
+          else cfg.schedule;
+        secretsOrEmpty =
+          if cfg.secretsFile == null
+          then ""
+          else cfg.secretsFile;
+      in {
+        text = ''
+          echo "[restic-backup] paths configured: ${toString pathsCount}${lib.optionalString (preview != "") " ("}${preview}${lib.optionalString (preview != "") ")"}"
+          if [ -n "${scheduleOrEmpty}" ]; then
+            echo "[restic-backup] timer OnCalendar: ${cfg.schedule}"
+            if ${sysdAnalyze} calendar "${cfg.schedule}" >/dev/null 2>&1; then
+              next_line="$(${sysdAnalyze} calendar --iterations=1 "${cfg.schedule}" 2>/dev/null | sed -n 's/^  Next elapse: //p' | head -1)"
+              [ -n "$next_line" ] && echo "[restic-backup] next elapse: $next_line"
+            else
+              echo "[restic-backup] WARNING: invalid OnCalendar expression: ${cfg.schedule}" >&2
+            fi
+          else
+            echo "[restic-backup] timer disabled"
+          fi
+
+          if [ -n "${secretsOrEmpty}" ]; then
+            if [ -r "${secretsOrEmpty}" ]; then
+              echo "[restic-backup] secrets file: ${secretsOrEmpty} (readable)"
+            else
+              echo "[restic-backup] WARNING: secrets file not readable: ${secretsOrEmpty}" >&2
+            fi
+          else
+            echo "[restic-backup] using individual secret files or env (no combined env file set)"
+          fi
+        '';
+      };
+    })
+  ];
 }
