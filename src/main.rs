@@ -82,6 +82,12 @@ fn init_logging() -> Result<(), crate::errors::BackupServiceError> {
 fn preload_env_files() {
     // Load system env file first, then project-local .env if present.
     // Existing environment variables take precedence and will not be overridden.
+    // If RBS_NO_DOTENV=1, skip all dotenv loading.
+    if std::env::var("RBS_NO_DOTENV").ok().as_deref() == Some("1") {
+        return;
+    }
+
+    // Preload system env explicitly so the binary sees it even when wrappers don't source
     let _ = dotenv::from_filename("/etc/restic-backup.env");
     let _ = dotenv::dotenv();
 }
