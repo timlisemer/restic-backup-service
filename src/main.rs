@@ -80,16 +80,47 @@ fn init_logging() -> Result<(), crate::errors::BackupServiceError> {
 }
 
 fn preload_env_files() {
-    // Load system env file first, then project-local .env if present.
-    // Existing environment variables take precedence and will not be overridden.
-    // If RBS_NO_DOTENV=1, skip all dotenv loading.
+    // If disabled, do nothing
     if std::env::var("RBS_NO_DOTENV").ok().as_deref() == Some("1") {
         return;
     }
 
-    // Preload system env explicitly so the binary sees it even when wrappers don't source
-    let _ = dotenv::from_filename("/etc/restic-backup.env");
-    let _ = dotenv::dotenv();
+    fn load_env_literal(path: &str) {
+        use std::fs;
+        use std::io::Read;
+        use std::path::Path;
+        if !Path::new(path).exists() {
+            return;
+        }
+        let mut f = match fs::File::open(path) {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        let mut s = String::new();
+        if f.read_to_string(&mut s).is_err() {
+            return;
+        }
+        for line in s.lines() {
+            let lead = line.trim_start();
+            if lead.is_empty() || lead.starts_with('#') {
+                continue;
+            }
+            if let Some(eq) = line.find('=') {
+                let key = line[..eq].trim();
+                let mut val = line[eq + 1..].to_string();
+                if val.ends_with('\r') {
+                    val.pop();
+                }
+                if std::env::var_os(key).is_none() {
+                    std::env::set_var(key, val);
+                }
+            }
+        }
+    }
+
+    // Load system then local, literally
+    load_env_literal("/etc/restic-backup.env");
+    load_env_literal(".env");
 }
 
 #[tokio::main]
