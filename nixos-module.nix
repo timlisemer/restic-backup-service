@@ -281,6 +281,9 @@ in {
       # Ensure the package and CLI wrapper are available in the system
       environment.systemPackages = [cfg.package cliWrapper];
 
+      # Persist non-secret configuration to /etc so manual runs can preload it
+      environment.etc."restic-backup-nonsecret.env".text = builtins.readFile envFile;
+
       # Show a concise summary during activation so rebuild output is informative
       system.activationScripts.resticBackupSummary = let
         sysdAnalyze = "${pkgs.systemd}/bin/systemd-analyze";

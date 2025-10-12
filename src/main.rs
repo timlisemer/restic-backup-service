@@ -119,6 +119,8 @@ fn preload_env_files() {
     }
 
     // Load system then local, literally
+    // Also load persistent non-secret config produced by the NixOS module
+    load_env_literal("/etc/restic-backup-nonsecret.env");
     load_env_literal("/etc/restic-backup.env");
     load_env_literal(".env");
 }
