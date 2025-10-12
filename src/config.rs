@@ -1,8 +1,6 @@
 use crate::errors::BackupServiceError;
 use serde::{Deserialize, Serialize};
 use std::env;
-use std::fs::File;
-use std::io::ErrorKind;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,10 +17,7 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Result<Self, BackupServiceError> {
-        // Load environment variables from .env file if present
-        dotenv::dotenv().ok();
-
-        // Load required variables from environment or well-known env files
+        // Load required variables strictly from environment (no file fallback)
         let restic_password = Self::required_var("RESTIC_PASSWORD")?;
         let restic_repo_base = Self::required_var("RESTIC_REPO_BASE")?;
         let aws_access_key_id = Self::required_var("AWS_ACCESS_KEY_ID")?;
@@ -61,73 +56,9 @@ impl Config {
 
     // Provide a clearer error when required config values are missing
     fn required_var(key: &str) -> Result<String, BackupServiceError> {
-        if let Ok(v) = env::var(key) {
-            return Ok(v);
-        }
-        // Early permission check for the system env file so non-root gets a clear error
-        let sys_env_path = "/etc/restic-backup.env";
-        if std::path::Path::new(sys_env_path).exists() {
-            if let Err(e) = File::open(sys_env_path) {
-                if e.kind() == ErrorKind::PermissionDenied {
-                    return Err(BackupServiceError::ConfigurationError(format!(
-                        "Secrets file not readable: {} (permission denied)",
-                        sys_env_path
-                    )));
-                }
-            }
-        }
-        if let Some(v) = Self::read_key_from_env_files(key) {
-            return Ok(v);
-        }
-        Err(BackupServiceError::ConfigurationError(format!(
-            "Missing required configuration: {}.\n\nExpected env file (one per line):\n  RESTIC_PASSWORD=...\n  RESTIC_REPO_BASE=s3:https://<endpoint>/<bucket>[/optional/base]\n  AWS_ACCESS_KEY_ID=...\n  AWS_SECRET_ACCESS_KEY=...\n  AWS_DEFAULT_REGION=auto\n  AWS_S3_ENDPOINT=https://<endpoint>\n  BACKUP_PATHS=/path/one,/path/two (optional)",
+        env::var(key).map_err(|_| BackupServiceError::ConfigurationError(format!(
+            "Missing required configuration: {}.\n\nExpected env file (one per line):\n\n  RESTIC_PASSWORD=...\n  RESTIC_REPO_BASE=s3:https://<endpoint>/<bucket>[/optional/base]\n  AWS_ACCESS_KEY_ID=...\n  AWS_SECRET_ACCESS_KEY=...\n  AWS_DEFAULT_REGION=auto\n  AWS_S3_ENDPOINT=https://<endpoint>\n  BACKUP_PATHS=/path/one,/path/two (optional)",
             key
-        )))
-    }
-
-    // Try to read a single key from known env files
-    fn read_key_from_env_files(key: &str) -> Option<String> {
-        let candidates = ["/etc/restic-backup.env", ".env"];
-        for path in candidates.iter() {
-            if let Ok(val) = Self::read_key_from_env_file(path, key) {
-                return Some(val);
-            }
-        }
-        None
-    }
-
-    fn read_key_from_env_file(path: &str, want_key: &str) -> Result<String, BackupServiceError> {
-        use std::fs::File;
-        use std::io::{BufRead, BufReader};
-
-        let file = File::open(path).map_err(|_| {
-            BackupServiceError::ConfigurationError(format!("Cannot open env file: {}", path))
-        })?;
-        let reader = BufReader::new(file);
-        for line in reader.lines() {
-            let line = line.map_err(|_| {
-                BackupServiceError::ConfigurationError(format!("Cannot read env file: {}", path))
-            })?;
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            if let Some((k, v)) = line.split_once('=') {
-                if k.trim().eq_ignore_ascii_case(want_key) {
-                    let mut value = v.trim().to_string();
-                    // Remove surrounding quotes if present
-                    if (value.starts_with('"') && value.ends_with('"'))
-                        || (value.starts_with('\'') && value.ends_with('\''))
-                    {
-                        value = value[1..value.len() - 1].to_string();
-                    }
-                    return Ok(value);
-                }
-            }
-        }
-        Err(BackupServiceError::ConfigurationError(format!(
-            "Key {} not found in env file: {}",
-            want_key, path
         )))
     }
 
@@ -199,7 +130,7 @@ impl Config {
     // Backwards-compat shim if needed by tests calling older method name
     #[allow(dead_code)]
     fn read_password_from_env_file() -> Result<String, BackupServiceError> {
-        Self::read_key_from_env_file(".env", "RESTIC_PASSWORD")
+        Self::required_var("RESTIC_PASSWORD")
     }
 }
 

@@ -9,7 +9,7 @@
   # Default package - will be overridden when used through flake
   defaultPackage = pkgs.rustPlatform.buildRustPackage rec {
     pname = "restic-backup-service";
-    version = "0.9.81";
+    version = "0.9.88";
     src = ./.;
     cargoLock = {
       lockFile = ./Cargo.lock;
@@ -31,8 +31,8 @@
     BACKUP_PATHS=${lib.concatStringsSep "," cfg.backupPaths}
     ${lib.optionalString (cfg.hostname != null) "BACKUP_HOSTNAME=${cfg.hostname}"}
   '';
-  # Fixed secrets path expected by both the unit and CLI
-  envInlineFile = "/etc/restic-backup.env";
+  # Secrets file path provided via NixOS option
+  envInlineFile = cfg.secret_file_path;
 
   # Create a script that sources secrets and runs the backup
   backupScript = pkgs.writeShellScript "restic-backup-runner" ''
@@ -97,12 +97,6 @@ in {
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = "Custom hostname for backups (defaults to system hostname)";
-    };
-
-    envContent = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      description = "(Deprecated) Inline env content no longer supported; provide /etc/restic-backup.env";
     };
 
     restic = {
@@ -175,6 +169,12 @@ in {
       default = "root";
       description = "Group to run the backup service as";
     };
+
+    secret_file_path = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = "Absolute path to the env-style secrets file used by the unit and CLI (required).";
+    };
   };
 
   # Thin wrapper interface to match user's desired config shape
@@ -188,17 +188,17 @@ in {
       example = ["/home/user/Documents" "/home/user/.config"];
     };
 
-    envContent = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      description = "(Deprecated) Provide /etc/restic-backup.env instead.";
-    };
-
     backupTime = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = "OnCalendar string (e.g., \"06:30\", \"daily\") or null to disable timer.";
       example = "06:30";
+    };
+
+    secret_file_path = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = "Absolute path to the env-style secrets file (required).";
     };
   };
 
@@ -210,8 +210,8 @@ in {
       lib.mkIf simple.enable {
         services.restic_backup.enable = true;
         services.restic_backup.backupPaths = simple.backupPaths;
-        # envContent ignored; expect /etc/restic-backup.env
         services.restic_backup.schedule = simple.backupTime;
+        services.restic_backup.secret_file_path = simple.secret_file_path;
       })
 
     (lib.mkIf cfg.enable {
@@ -220,7 +220,10 @@ in {
           assertion = cfg.backupPaths != [];
           message = "services.restic_backup.backupPaths must not be empty";
         }
-        # No inline; require the fixed file to exist at activation
+        {
+          assertion = cfg.secret_file_path != null;
+          message = "services.restic_backup.secret_file_path must be set to a valid secrets file path.";
+        }
       ];
 
       systemd.services.restic-backup = {

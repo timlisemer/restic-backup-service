@@ -89,36 +89,72 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load configuration for all commands except init
     let config = match &cli.command {
         Commands::Init => None,
-        _ => Some(config::Config::load()?),
+        _ => match config::Config::load() {
+            Ok(c) => Some(c),
+            Err(e) => {
+                render_pretty_error(&e);
+                std::process::exit(1);
+            }
+        },
     };
 
-    // Dispatch CLI commands to their respective handlers
-    match cli.command {
-        Commands::Run { paths } => {
-            backup::run_backup(config.unwrap(), paths).await?;
-        }
-        Commands::List { host, json } => {
-            list::list_backups(config.unwrap(), host, json).await?;
-        }
+    // Dispatch CLI commands to their respective handlers and render errors nicely
+    let result = match cli.command {
+        Commands::Run { paths } => backup::run_backup(config.unwrap(), paths).await,
+        Commands::List { host, json } => list::list_backups(config.unwrap(), host, json).await,
         Commands::Restore {
             host,
             path,
             timestamp,
-        } => {
-            restore::restore_interactive(config.unwrap(), host, path, timestamp).await?;
-        }
-        Commands::Size { path } => {
-            utils::show_size(config.unwrap(), path).await?;
-        }
-        Commands::Hosts => {
-            list::list_hosts(config.unwrap()).await?;
-        }
+        } => restore::restore_interactive(config.unwrap(), host, path, timestamp).await,
+        Commands::Size { path } => utils::show_size(config.unwrap(), path).await,
+        Commands::Hosts => list::list_hosts(config.unwrap()).await,
         Commands::Init => {
-            init_env_file()?;
+            if let Err(e) = init_env_file() {
+                render_pretty_error(&e);
+                std::process::exit(1);
+            }
+            Ok(())
         }
+    };
+
+    if let Err(e) = result {
+        render_pretty_error(&e);
+        std::process::exit(1);
     }
 
     Ok(())
+}
+
+fn render_pretty_error(e: &crate::errors::BackupServiceError) {
+    use crate::errors::BackupServiceError::*;
+    use tracing::{error, info};
+
+    match e {
+        // Configuration errors – split into header + helpful lines
+        ConfigurationError(msg) => {
+            if let Some((first, rest)) = msg.split_once('\n') {
+                error!("{}", first.trim());
+                for line in rest.lines() {
+                    let l = line.trim();
+                    if !l.is_empty() {
+                        info!("{}", l);
+                    }
+                }
+            } else {
+                error!("{}", msg);
+            }
+        }
+        AuthenticationFailed => {
+            error!("Authentication failed: invalid credentials or access denied")
+        }
+        NetworkError => error!("Network error: cannot connect to repository"),
+        RepositoryNotFound(ctx) => error!("Repository not found: {}", ctx),
+        CommandFailed(msg) => error!("Command execution failed: {}", msg),
+        CommandNotFound(cmd) => error!("Command not found or execution error: {}", cmd),
+        CredentialValidationFailed(inner) => render_pretty_error(inner),
+        other => error!("{}", other),
+    }
 }
 
 // Create sample .env file with configuration template for first-time setup
