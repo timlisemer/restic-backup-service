@@ -2,6 +2,7 @@ use crate::errors::BackupServiceError;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::PathBuf;
+use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -17,7 +18,11 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Result<Self, BackupServiceError> {
-        // Load required variables strictly from environment (no file fallback)
+        // Normalize any lowercase aliases to the required uppercase names (non-destructive)
+        Self::normalize_env_aliases();
+        // Log environment presence for debugging
+        Self::debug_log_env_presence();
+
         let restic_password = Self::required_var("RESTIC_PASSWORD")?;
         let restic_repo_base = Self::required_var("RESTIC_REPO_BASE")?;
         let aws_access_key_id = Self::required_var("AWS_ACCESS_KEY_ID")?;
@@ -131,6 +136,79 @@ impl Config {
     #[allow(dead_code)]
     fn read_password_from_env_file() -> Result<String, BackupServiceError> {
         Self::required_var("RESTIC_PASSWORD")
+    }
+
+    fn debug_log_env_presence() {
+        // Helper to mask secrets while still showing that values are present
+        fn mask(value: &str) -> String {
+            if value.is_empty() {
+                return "<empty>".to_string();
+            }
+            let len = value.chars().count();
+            if len <= 4 {
+                return "****".to_string();
+            }
+            let start: String = value.chars().take(2).collect();
+            let end: String = value
+                .chars()
+                .rev()
+                .take(2)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            format!("{}…{} (len {})", start, end, len)
+        }
+
+        let debug_keys = [
+            ("RESTIC_PASSWORD", true),
+            ("RESTIC_REPO_BASE", false),
+            ("AWS_ACCESS_KEY_ID", true),
+            ("AWS_SECRET_ACCESS_KEY", true),
+            ("AWS_DEFAULT_REGION", false),
+            ("AWS_S3_ENDPOINT", false),
+            ("BACKUP_PATHS", false),
+            ("BACKUP_HOSTNAME", false),
+        ];
+
+        for (key, is_secret) in debug_keys {
+            match env::var(key) {
+                Ok(val) => {
+                    if is_secret {
+                        info!(key = %key, present = true, value = %mask(&val), "env var present");
+                    } else {
+                        info!(key = %key, present = true, value = %val, "env var present");
+                    }
+                }
+                Err(_) => {
+                    info!(key = %key, present = false, "env var missing");
+                }
+            }
+        }
+    }
+
+    fn normalize_env_aliases() {
+        // If uppercase is missing but lowercase exists, copy value.
+        fn copy_if_missing(upper: &str, lower: &str) {
+            let upper_missing = env::var(upper).is_err();
+            if upper_missing {
+                if let Ok(val) = env::var(lower) {
+                    // Only set if non-empty
+                    if !val.is_empty() {
+                        env::set_var(upper, val);
+                    }
+                }
+            }
+        }
+
+        copy_if_missing("RESTIC_PASSWORD", "restic_password");
+        copy_if_missing("RESTIC_REPO_BASE", "restic_repo_base");
+        copy_if_missing("AWS_ACCESS_KEY_ID", "aws_access_key_id");
+        copy_if_missing("AWS_SECRET_ACCESS_KEY", "aws_secret_access_key");
+        copy_if_missing("AWS_DEFAULT_REGION", "aws_default_region");
+        copy_if_missing("AWS_S3_ENDPOINT", "aws_s3_endpoint");
+        copy_if_missing("BACKUP_PATHS", "backup_paths");
+        copy_if_missing("BACKUP_HOSTNAME", "backup_hostname");
     }
 }
 

@@ -79,10 +79,20 @@ fn init_logging() -> Result<(), crate::errors::BackupServiceError> {
     Ok(())
 }
 
+fn preload_env_files() {
+    // Load system env file first, then project-local .env if present.
+    // Existing environment variables take precedence and will not be overridden.
+    let _ = dotenv::from_filename("/etc/restic-backup.env");
+    let _ = dotenv::dotenv();
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing logging
     init_logging()?;
+
+    // Attempt to load env files for CLI usage
+    preload_env_files();
 
     let cli = Cli::parse();
 
