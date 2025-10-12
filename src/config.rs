@@ -17,6 +17,21 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Result<Self, BackupServiceError> {
+        // If a secrets file has been specified, verify it is readable for the current user.
+        if let Ok(secrets_path) = std::env::var("BACKUP_SECRETS_FILE") {
+            let path = std::path::Path::new(&secrets_path);
+            if path.exists() {
+                if let Err(e) = std::fs::File::open(path) {
+                    if e.kind() == std::io::ErrorKind::PermissionDenied {
+                        return Err(BackupServiceError::ConfigurationError(format!(
+                            "Cannot read secrets file: {}.\n\nThe current user lacks read permission. Try running with elevated privileges (e.g., sudo) or adjust file permissions to allow read access.",
+                            secrets_path
+                        )));
+                    }
+                }
+            }
+        }
+
         let restic_password = Self::required_var("RESTIC_PASSWORD")?;
         let restic_repo_base = Self::required_var("RESTIC_REPO_BASE")?;
         let aws_access_key_id = Self::required_var("AWS_ACCESS_KEY_ID")?;
