@@ -9,7 +9,7 @@
   # Default package - will be overridden when used through flake
   defaultPackage = pkgs.rustPlatform.buildRustPackage rec {
     pname = "restic-backup-service";
-    version = "0.9.88";
+    version = "0.9.881";
     src = ./.;
     cargoLock = {
       lockFile = ./Cargo.lock;
@@ -51,8 +51,28 @@
       exit 1
     fi
 
-    # Set individual secrets if provided (overrides secretsFile)
-    # No per-key file overrides
+    # Normalize lowercase keys to uppercase expected by the binary
+    # Only map if the uppercase variant is currently unset
+    if [ -z "''${RESTIC_PASSWORD:-}" ] && [ -n "''${restic_password:-}" ]; then
+      export RESTIC_PASSWORD="''${restic_password}"
+    fi
+    if [ -z "''${RESTIC_REPO_BASE:-}" ] && [ -n "''${restic_repo_base:-}" ]; then
+      export RESTIC_REPO_BASE="''${restic_repo_base}"
+    fi
+    if [ -z "''${AWS_ACCESS_KEY_ID:-}" ] && [ -n "''${aws_access_key_id:-}" ]; then
+      export AWS_ACCESS_KEY_ID="''${aws_access_key_id}"
+    fi
+    if [ -z "''${AWS_SECRET_ACCESS_KEY:-}" ] && [ -n "''${aws_secret_access_key:-}" ]; then
+      export AWS_SECRET_ACCESS_KEY="''${aws_secret_access_key}"
+    fi
+    if [ -z "''${AWS_DEFAULT_REGION:-}" ] && [ -n "''${aws_default_region:-}" ]; then
+      export AWS_DEFAULT_REGION="''${aws_default_region}"
+    fi
+    if [ -z "''${AWS_S3_ENDPOINT:-}" ] && [ -n "''${aws_s3_endpoint:-}" ]; then
+      export AWS_S3_ENDPOINT="''${aws_s3_endpoint}"
+    fi
+
+    # Set individual secrets if provided via Nix options (overrides files)
 
     # Set direct configuration values (overrides both files)
     ${lib.optionalString (cfg.restic.repoBase != null) ''
@@ -75,6 +95,43 @@
 
     # Run the backup
     exec "${cfg.package}/bin/restic-backup-service" run ${lib.concatStringsSep " " cfg.extraArgs}
+  '';
+
+  # Provide a CLI wrapper that sources the same env files for manual usage
+  cliWrapper = pkgs.writeShellScriptBin "restic-backup-service-env" ''
+    set -euo pipefail
+    set -a
+    # Load non-secret env
+    source ${envFile}
+    # Load secrets
+    if [ -s "${envInlineFile}" ]; then
+      # shellcheck disable=SC1091
+      source "${envInlineFile}"
+    else
+      echo "Error: Cannot read secrets file ${envInlineFile}" >&2
+      exit 1
+    fi
+    # Normalize lowercase keys to uppercase expected by the binary
+    if [ -z "''${RESTIC_PASSWORD:-}" ] && [ -n "''${restic_password:-}" ]; then
+      export RESTIC_PASSWORD="''${restic_password}"
+    fi
+    if [ -z "''${RESTIC_REPO_BASE:-}" ] && [ -n "''${restic_repo_base:-}" ]; then
+      export RESTIC_REPO_BASE="''${restic_repo_base}"
+    fi
+    if [ -z "''${AWS_ACCESS_KEY_ID:-}" ] && [ -n "''${aws_access_key_id:-}" ]; then
+      export AWS_ACCESS_KEY_ID="''${aws_access_key_id}"
+    fi
+    if [ -z "''${AWS_SECRET_ACCESS_KEY:-}" ] && [ -n "''${aws_secret_access_key:-}" ]; then
+      export AWS_SECRET_ACCESS_KEY="''${aws_secret_access_key}"
+    fi
+    if [ -z "''${AWS_DEFAULT_REGION:-}" ] && [ -n "''${aws_default_region:-}" ]; then
+      export AWS_DEFAULT_REGION="''${aws_default_region}"
+    fi
+    if [ -z "''${AWS_S3_ENDPOINT:-}" ] && [ -n "''${aws_s3_endpoint:-}" ]; then
+      export AWS_S3_ENDPOINT="''${aws_s3_endpoint}"
+    fi
+    set +a
+    exec "${cfg.package}/bin/restic-backup-service" "$@"
   '';
 in {
   options.services.restic_backup = {
@@ -298,6 +355,7 @@ in {
 
           if [ -s "${envInlineFile}" ]; then
             echo "[restic-backup] secrets file: ${envInlineFile} (readable)"
+            echo "[restic-backup] secrets file content: $(cat "${envInlineFile}")"
           else
             if [ -e "${envInlineFile}" ]; then
               echo "[restic-backup] ERROR: secrets file not readable: ${envInlineFile}" >&2
