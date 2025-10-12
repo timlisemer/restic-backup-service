@@ -9,7 +9,7 @@
   # Default package - will be overridden when used through flake
   defaultPackage = pkgs.rustPlatform.buildRustPackage rec {
     pname = "restic-backup-service";
-    version = "0.9.8891";
+    version = "0.9.8892";
     src = ./.;
     cargoLock = {
       lockFile = ./Cargo.lock;
@@ -311,7 +311,6 @@ in {
 
           if [ -s "${envInlineFile}" ]; then
             echo "[restic-backup] secrets file: ${envInlineFile} (readable)"
-            echo "[restic-backup] secrets file content: $(cat "${envInlineFile}")"
           else
             if [ -e "${envInlineFile}" ]; then
               echo "[restic-backup] ERROR: secrets file not readable: ${envInlineFile}" >&2

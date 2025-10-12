@@ -1,6 +1,6 @@
 [package]
 name = "restic-backup-service"
-version = "0.9.8891"
+version = "0.9.8892"
 edition = "2021"
 
 [dependencies]

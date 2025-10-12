@@ -2,7 +2,6 @@ use crate::errors::BackupServiceError;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::PathBuf;
-use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -18,9 +17,6 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Result<Self, BackupServiceError> {
-        // Log environment presence for debugging
-        Self::debug_log_env_presence();
-
         let restic_password = Self::required_var("RESTIC_PASSWORD")?;
         let restic_repo_base = Self::required_var("RESTIC_REPO_BASE")?;
         let aws_access_key_id = Self::required_var("AWS_ACCESS_KEY_ID")?;
@@ -134,31 +130,6 @@ impl Config {
     #[allow(dead_code)]
     fn read_password_from_env_file() -> Result<String, BackupServiceError> {
         Self::required_var("RESTIC_PASSWORD")
-    }
-
-    fn debug_log_env_presence() {
-        let debug_keys = [
-            ("RESTIC_PASSWORD", true),
-            ("RESTIC_REPO_BASE", false),
-            ("AWS_ACCESS_KEY_ID", true),
-            ("AWS_SECRET_ACCESS_KEY", true),
-            ("AWS_DEFAULT_REGION", false),
-            ("AWS_S3_ENDPOINT", false),
-            ("BACKUP_PATHS", false),
-            ("BACKUP_HOSTNAME", false),
-        ];
-
-        for (key, _is_secret) in debug_keys {
-            match env::var(key) {
-                Ok(val) => {
-                    // Always print exact value, no masking or length
-                    info!(key = %key, present = true, value = %val, "env var present");
-                }
-                Err(_) => {
-                    info!(key = %key, present = false, "env var missing");
-                }
-            }
-        }
     }
 
     // Removed all env mutation; values are used exactly as provided by the environment

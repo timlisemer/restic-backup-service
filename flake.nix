@@ -17,7 +17,7 @@
       in {
         packages.default = pkgs.rustPlatform.buildRustPackage rec {
           pname = "restic-backup-service";
-          version = "0.9.8891";
+          version = "0.9.8892";
 
           src = ./.;
 
