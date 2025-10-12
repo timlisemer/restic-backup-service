@@ -1,4 +1,5 @@
 use crate::errors::BackupServiceError;
+use crate::shared::constants::{CATEGORY_DOCKER_VOLUME, CATEGORY_SYSTEM, CATEGORY_USER_HOME};
 use crate::shared::operations::RepositorySelectionItem;
 use chrono::{DateTime, Duration, Utc};
 use dialoguer::{Confirm, MultiSelect, Select};
@@ -86,15 +87,15 @@ pub async fn select_repositories(
         // Display summary first
         let user_home_count = backup_data
             .iter()
-            .filter(|r| r.category == "user_home")
+            .filter(|r| r.category == CATEGORY_USER_HOME)
             .count();
         let docker_count = backup_data
             .iter()
-            .filter(|r| r.category == "docker_volume")
+            .filter(|r| r.category == CATEGORY_DOCKER_VOLUME)
             .count();
         let system_count = backup_data
             .iter()
-            .filter(|r| r.category == "system")
+            .filter(|r| r.category == CATEGORY_SYSTEM)
             .count();
 
         info!(
@@ -119,9 +120,9 @@ pub async fn select_repositories(
 
         match selection {
             0 => backup_data.clone(),
-            1 => handle_category_selection(&backup_data, "user_home"),
-            2 => handle_category_selection(&backup_data, "docker_volume"),
-            3 => handle_category_selection(&backup_data, "system"),
+            1 => handle_category_selection(&backup_data, CATEGORY_USER_HOME),
+            2 => handle_category_selection(&backup_data, CATEGORY_DOCKER_VOLUME),
+            3 => handle_category_selection(&backup_data, CATEGORY_SYSTEM),
             4 => {
                 let items: Vec<String> = backup_data
                     .iter()

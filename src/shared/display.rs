@@ -1,6 +1,7 @@
 use crate::errors::BackupServiceError;
-use crate::shared::operations::SnapshotInfo;
 use crate::repository::BackupRepo;
+use crate::shared::constants::{CATEGORY_DOCKER_VOLUME, CATEGORY_SYSTEM, CATEGORY_USER_HOME};
+use crate::shared::operations::SnapshotInfo;
 use std::collections::HashMap;
 use tracing::info;
 
@@ -69,7 +70,7 @@ impl DisplayFormatter {
         categories: &HashMap<&str, Vec<&BackupRepo>>,
     ) -> Result<(), BackupServiceError> {
         let empty_vec = Vec::new();
-        let user_repos = categories.get("user_home").unwrap_or(&empty_vec);
+        let user_repos = categories.get(CATEGORY_USER_HOME).unwrap_or(&empty_vec);
 
         info!("");
         info!("User Home ({} paths):", user_repos.len());
@@ -89,7 +90,7 @@ impl DisplayFormatter {
         categories: &HashMap<&str, Vec<&BackupRepo>>,
     ) -> Result<(), BackupServiceError> {
         let empty_vec = Vec::new();
-        let docker_repos = categories.get("docker_volume").unwrap_or(&empty_vec);
+        let docker_repos = categories.get(CATEGORY_DOCKER_VOLUME).unwrap_or(&empty_vec);
 
         info!("");
         info!("Docker Volumes ({} paths):", docker_repos.len());
@@ -109,7 +110,7 @@ impl DisplayFormatter {
         categories: &HashMap<&str, Vec<&BackupRepo>>,
     ) -> Result<(), BackupServiceError> {
         let empty_vec = Vec::new();
-        let system_repos = categories.get("system").unwrap_or(&empty_vec);
+        let system_repos = categories.get(CATEGORY_SYSTEM).unwrap_or(&empty_vec);
 
         info!("");
         info!("System ({} paths):", system_repos.len());
@@ -183,8 +184,8 @@ impl DisplayFormatter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::operations::SnapshotInfo;
     use crate::repository::BackupRepo;
+    use crate::shared::operations::SnapshotInfo;
     use chrono::{DateTime, Utc};
     use std::path::PathBuf;
 

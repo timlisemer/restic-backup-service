@@ -233,9 +233,9 @@ impl ResticCommandExecutor {
 /// Determine backup tag based on path (extracted from PathMapper)
 pub fn determine_backup_tag(path: &Path) -> Result<&'static str, BackupServiceError> {
     let path_str = path.to_string_lossy();
-    let tag = if path_str.starts_with("/home/") {
+    let tag = if path_str.starts_with(crate::shared::constants::HOME_DIR_WITH_SLASH) {
         "user-path"
-    } else if path_str.starts_with("/mnt/docker-data/volumes/") {
+    } else if path_str.starts_with(crate::shared::constants::DOCKER_VOLUMES_DIR_WITH_SLASH) {
         "docker-volume"
     } else {
         "system-path"

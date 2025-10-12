@@ -9,7 +9,7 @@
   # Default package - will be overridden when used through flake
   defaultPackage = pkgs.rustPlatform.buildRustPackage rec {
     pname = "restic-backup-service";
-    version = "0.9.8892";
+    version = "1.0.0";
     src = ./.;
     cargoLock = {
       lockFile = ./Cargo.lock;
@@ -42,12 +42,20 @@
     set -a
     source ${envFile}
 
-    # Do NOT source secrets file here to avoid any shell expansion.
-    # Binary will preload /etc/restic-backup.env itself.
-    if [ ! -s "${envInlineFile}" ]; then
-      echo "Error: Cannot read secrets file ${envInlineFile}" >&2
-      exit 1
+    # Detect and log catch-up runs for simple HH:MM schedules
+    SCHEDULE="${cfg.schedule or ""}"
+    if [ -n "$SCHEDULE" ] && printf '%s' "$SCHEDULE" | grep -Eq '^[0-9]{1,2}:[0-9]{2}$'; then
+      now_h=$(date +%H)
+      now_m=$(date +%M)
+      sched_h=$(printf '%02d' "''${SCHEDULE%:*}")
+      sched_m="''${SCHEDULE#*:}"
+      if [ "$now_h" != "$sched_h" ] || [ "$now_m" != "$sched_m" ]; then
+        echo "[restic-backup] catch-up run (schedule=$SCHEDULE, now=$(date -Is))"
+      fi
     fi
+
+    # Secrets file presence is not validated here to avoid affecting boot/rebuild.
+    # The binary will attempt to preload /etc/restic-backup.env itself.
 
     # Set individual secrets if provided via Nix options (overrides files)
 
@@ -62,13 +70,7 @@
 
     set +a
 
-    # Validate required environment variables
-    for var in RESTIC_PASSWORD RESTIC_REPO_BASE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_S3_ENDPOINT; do
-      if [ -z "''${!var:-}" ]; then
-        echo "Error: Required environment variable $var is not set" >&2
-        exit 1
-      fi
-    done
+    # No pre-exec env validation here; failures will be handled at runtime by the program.
 
     # Run the backup
     exec "${cfg.package}/bin/restic-backup-service" run ${lib.concatStringsSep " " cfg.extraArgs}
@@ -80,12 +82,7 @@
     set -a
     # Load non-secret env
     source ${envFile}
-    # Do NOT source secrets file here to avoid any shell expansion.
-    # Binary will preload /etc/restic-backup.env itself.
-    if [ ! -s "${envInlineFile}" ]; then
-      echo "Error: Cannot read secrets file ${envInlineFile}" >&2
-      exit 1
-    fi
+    # Secrets file presence is not validated here; binary handles its own preload.
     set +a
     exec "${cfg.package}/bin/restic-backup-service" "$@"
   '';
@@ -270,11 +267,14 @@ in {
       systemd.timers.restic-backup = lib.mkIf (cfg.schedule != null) {
         description = "Timer for restic backup service";
         wantedBy = ["timers.target"];
+        unitConfig = {
+          After = ["multi-user.target" "network-online.target"];
+          Wants = ["network-online.target"];
+        };
 
         timerConfig = {
           OnCalendar = cfg.schedule;
           Persistent = true;
-          RandomizedDelaySec = "5m";
         };
       };
 
@@ -308,17 +308,7 @@ in {
           else
             echo "[restic-backup] timer disabled"
           fi
-
-          if [ -s "${envInlineFile}" ]; then
-            echo "[restic-backup] secrets file: ${envInlineFile} (readable)"
-          else
-            if [ -e "${envInlineFile}" ]; then
-              echo "[restic-backup] ERROR: secrets file not readable: ${envInlineFile}" >&2
-            else
-              echo "[restic-backup] ERROR: secrets file missing: ${envInlineFile}" >&2
-            fi
-            exit 1
-          fi
+          # Secrets file checks intentionally removed to avoid impacting boot/rebuild.
         '';
       };
     })

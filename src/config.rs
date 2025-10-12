@@ -114,6 +114,7 @@ impl Config {
         env::set_var("AWS_ACCESS_KEY_ID", &self.aws_access_key_id);
         env::set_var("AWS_SECRET_ACCESS_KEY", &self.aws_secret_access_key);
         env::set_var("AWS_DEFAULT_REGION", &self.aws_default_region);
+        env::set_var("AWS_S3_ENDPOINT", &self.aws_s3_endpoint);
         env::set_var("RESTIC_PASSWORD", &self.restic_password);
         Ok(())
     }
