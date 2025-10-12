@@ -9,7 +9,7 @@
   # Default package - will be overridden when used through flake
   defaultPackage = pkgs.rustPlatform.buildRustPackage rec {
     pname = "restic-backup-service";
-    version = "1.1.0";
+    version = "1.1.2";
     src = ./.;
     cargoLock = {
       lockFile = ./Cargo.lock;
@@ -58,7 +58,6 @@
     fi
 
     # Secrets file presence is not validated here to avoid affecting boot/rebuild.
-    # The binary will attempt to preload /etc/restic-backup.env itself.
 
     # Set individual secrets if provided via Nix options (overrides files)
 
@@ -353,6 +352,7 @@ in {
             ("BACKUP_PATHS=" + (lib.concatStringsSep "," cfg.backupPaths))
           ]
           ++ lib.optional (cfg.hostname != null) ("BACKUP_HOSTNAME=" + cfg.hostname)
+          ++ lib.optional (cfg.secret_file_path != null) ("BACKUP_SECRETS_FILE=" + (toString cfg.secret_file_path))
           ++ lib.optional (cfg.exclude.file != null) ("BACKUP_EXCLUDE_FILE=" + (toString cfg.exclude.file))
           ++ lib.optional (cfg.exclude.file == null && cfg.exclude.patterns != []) "BACKUP_EXCLUDE_FILE=/etc/restic-backup.exclude"
           ++ lib.optional (cfg.exclude.largerThan != null) ("BACKUP_EXCLUDE_LARGER_THAN=" + cfg.exclude.largerThan)

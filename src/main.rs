@@ -121,7 +121,11 @@ fn preload_env_files() {
     // Load system then local, literally
     // Also load persistent non-secret config produced by the NixOS module
     load_env_literal("/etc/restic-backup-nonsecret.env");
-    load_env_literal("/etc/restic-backup.env");
+    if let Ok(secret_path) = std::env::var("BACKUP_SECRETS_FILE") {
+        if !secret_path.trim().is_empty() {
+            load_env_literal(&secret_path);
+        }
+    }
     load_env_literal(".env");
 }
 
@@ -218,26 +222,26 @@ fn init_env_file() -> Result<(), crate::errors::BackupServiceError> {
     }
 
     let content = r#"# Restic Backup Service Configuration
-# Fill in your actual values below
+# Fill in your actual values below (keys must be CAPITALIZED exactly as shown)
 
 # Restic repository password
-RESTIC_PASSWORD=your_restic_password_here
+RESTIC_PASSWORD=...
 
 # S3/R2 Repository base URL
-RESTIC_REPO_BASE=s3:https://your-bucket.r2.cloudflarestorage.com/restic
+RESTIC_REPO_BASE=s3:https://<endpoint>/<bucket>[/optional/base]
 
 # AWS/S3 Credentials
-AWS_ACCESS_KEY_ID=your_access_key_here
-AWS_SECRET_ACCESS_KEY=your_secret_key_here
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
 AWS_DEFAULT_REGION=auto
-AWS_S3_ENDPOINT=https://your-bucket.r2.cloudflarestorage.com
+AWS_S3_ENDPOINT=https://<endpoint>
 
 # Backup paths (comma-separated)
 # Example: /home/user/documents,/home/user/projects
 BACKUP_PATHS=/home/user/important_data
 
 # Optional: Custom hostname (defaults to system hostname)
-# BACKUP_HOSTNAME=my-custom-hostname
+# BACKUP_HOSTNAME=custom-host
 "#;
 
     fs::write(env_file, content)?;

@@ -56,8 +56,9 @@ Logging to stdout and rotating file `./logs/restic-backup.log.YYYY-MM-DD` (via `
 
 Env preload order at process start (unless `RBS_NO_DOTENV=1`):
 
-1. `/etc/restic-backup.env` (literal key=value line parsing)
-2. `.env` in CWD
+1. `/etc/restic-backup-nonsecret.env` (literal key=value line parsing)
+2. file pointed to by `BACKUP_SECRETS_FILE` if set (literal parsing)
+3. `.env` in CWD
 
 Key helpers:
 
@@ -169,18 +170,7 @@ The flake exposes a NixOS module with two interfaces:
 Important details:
 
 - The runner script exports non-secrets (`AWS_DEFAULT_REGION`, `BACKUP_PATHS`, optional `BACKUP_HOSTNAME`) from a generated file, but for security it does not `source` the secrets file directly.
-- The binary itself preloads env files from `/etc/restic-backup.env` and `.env`.
-- Therefore, make the secrets file available at `/etc/restic-backup.env` so the binary reads it automatically, or create a symlink:
-
-```nix
-# Ensure the binary sees the env at /etc/restic-backup.env
-{ config, ... }:
-{
-  environment.etc."restic-backup.env".source = config.sops.secrets.resticENV.path;
-}
-```
-
-Alternatively, set `secret_file_path = "/etc/restic-backup.env"` so the same file path is used everywhere.
+- The binary preloads `/etc/restic-backup-nonsecret.env`, then loads the secrets file pointed to by `BACKUP_SECRETS_FILE` if present, then `.env`.
 
 ### Low-level interface
 
@@ -207,7 +197,7 @@ services.restic_backup = {
   user = "root"; group = "root";
 
   # REQUIRED: absolute path to env-style secrets file (validated for readability)
-  secret_file_path = "/etc/restic-backup.env";
+  secret_file_path = "...";
 };
 ```
 

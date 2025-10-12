@@ -9,7 +9,7 @@ Rust CLI to run restic backups to S3-compatible storage (e.g., Cloudflare R2), l
 
 ## Configuration (env)
 
-The binary preloads env files `/etc/restic-backup.env` and `.env` (unless `RBS_NO_DOTENV=1`). Required env vars:
+The binary preloads env files `/etc/restic-backup-nonsecret.env`, a secrets file path from `BACKUP_SECRETS_FILE` if set, and `.env` (unless `RBS_NO_DOTENV=1`). Required env vars (keys must be CAPITALIZED exactly as shown):
 
 ```env
 RESTIC_PASSWORD=...

@@ -56,7 +56,7 @@ impl Config {
     // Provide a clearer error when required config values are missing
     fn required_var(key: &str) -> Result<String, BackupServiceError> {
         env::var(key).map_err(|_| BackupServiceError::ConfigurationError(format!(
-            "Missing required configuration: {}.\n\nExpected env file (one per line):\n\n  RESTIC_PASSWORD=...\n  RESTIC_REPO_BASE=s3:https://<endpoint>/<bucket>[/optional/base]\n  AWS_ACCESS_KEY_ID=...\n  AWS_SECRET_ACCESS_KEY=...\n  AWS_DEFAULT_REGION=auto\n  AWS_S3_ENDPOINT=https://<endpoint>\n  BACKUP_PATHS=/path/one,/path/two (optional)",
+            "Missing required configuration: {}.\n\nExpected env file (one per line; keys must be CAPITALIZED exactly as shown):\n\n  RESTIC_PASSWORD=...\n  RESTIC_REPO_BASE=s3:https://<endpoint>/<bucket>[/optional/base]\n  AWS_ACCESS_KEY_ID=...\n  AWS_SECRET_ACCESS_KEY=...\n  AWS_DEFAULT_REGION=auto\n  AWS_S3_ENDPOINT=https://<endpoint>\n  BACKUP_PATHS=/path/one,/path/two (optional)\n  BACKUP_HOSTNAME=custom-host (optional)",
             key
         )))
     }
