@@ -9,7 +9,7 @@
   # Default package - will be overridden when used through flake
   defaultPackage = pkgs.rustPlatform.buildRustPackage rec {
     pname = "restic-backup-service";
-    version = "1.0.0";
+    version = "1.1.0";
     src = ./.;
     cargoLock = {
       lockFile = ./Cargo.lock;
