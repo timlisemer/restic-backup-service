@@ -27,9 +27,9 @@
 
   # Create environment file with non-secret configuration
   envFile = pkgs.writeText "restic-backup-env" ''
-    AWS_DEFAULT_REGION=${cfg.aws.defaultRegion}
-    BACKUP_PATHS=${lib.concatStringsSep "," cfg.backupPaths}
-    ${lib.optionalString (cfg.hostname != null) "BACKUP_HOSTNAME=${cfg.hostname}"}
+    AWS_DEFAULT_REGION=${lib.escapeShellArg cfg.aws.defaultRegion}
+    BACKUP_PATHS=${lib.escapeShellArg (lib.concatStringsSep "," cfg.backupPaths)}
+    ${lib.optionalString (cfg.hostname != null) ("BACKUP_HOSTNAME=" + lib.escapeShellArg cfg.hostname)}
   '';
   # Secrets file path provided via NixOS option
   envInlineFile = cfg.secret_file_path;
