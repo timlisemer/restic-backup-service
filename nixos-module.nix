@@ -30,6 +30,9 @@
     AWS_DEFAULT_REGION=${lib.escapeShellArg cfg.aws.defaultRegion}
     BACKUP_PATHS=${lib.escapeShellArg (lib.concatStringsSep "," cfg.backupPaths)}
     ${lib.optionalString (cfg.hostname != null) ("BACKUP_HOSTNAME=" + lib.escapeShellArg cfg.hostname)}
+    ${lib.optionalString (cfg.exclude.file != null) ("BACKUP_EXCLUDE_FILE=" + lib.escapeShellArg (toString cfg.exclude.file))}
+    ${lib.optionalString (cfg.exclude.largerThan != null) ("BACKUP_EXCLUDE_LARGER_THAN=" + lib.escapeShellArg cfg.exclude.largerThan)}
+    ${lib.optionalString (cfg.exclude.ifPresent != []) ("BACKUP_EXCLUDE_IF_PRESENT=" + lib.escapeShellArg (lib.concatStringsSep "," cfg.exclude.ifPresent))}
   '';
   # Secrets file path provided via NixOS option
   envInlineFile = cfg.secret_file_path;
@@ -88,6 +91,34 @@
   '';
 in {
   options.services.restic_backup = {
+    exclude = {
+      patterns = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        example = ["*.vk3" "**/node_modules/**" "tmp/" "My Exact File.txt"];
+        description = "Patterns written to /etc/restic-backup.exclude and passed via --exclude-file (restic pattern syntax).";
+      };
+
+      file = lib.mkOption {
+        type = lib.types.nullOr lib.types.path;
+        default = null;
+        description = "Path to an existing exclude file; if set, patterns are not written to /etc. BACKUP_EXCLUDE_FILE points here.";
+      };
+
+      ifPresent = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        example = [".nobackup" "CACHEDIR.TAG"];
+        description = "List of marker filenames for --exclude-if-present (applied to all sources).";
+      };
+
+      largerThan = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "2G";
+        description = "Size threshold for --exclude-larger-than (e.g. 100M, 2G).";
+      };
+    };
     enable = lib.mkEnableOption "Restic backup service";
 
     package = lib.mkOption {
@@ -187,7 +218,6 @@ in {
     };
   };
 
-  # Thin wrapper interface to match user's desired config shape
   options.services."restic-backup-service" = {
     enable = lib.mkEnableOption "Simple restic-backup-service wrapper (maps to services.restic_backup)";
 
@@ -210,6 +240,30 @@ in {
       default = null;
       description = "Absolute path to the env-style secrets file (required).";
     };
+
+    # Mirror of exclude options for convenience when using the wrapper interface
+    exclude = {
+      patterns = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        description = "Patterns written to /etc/restic-backup.exclude and used via --exclude-file.";
+      };
+      file = lib.mkOption {
+        type = lib.types.nullOr lib.types.path;
+        default = null;
+        description = "Path to an existing exclude file to use instead of generated one.";
+      };
+      ifPresent = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        description = "Marker filenames for --exclude-if-present.";
+      };
+      largerThan = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Size threshold passed to --exclude-larger-than (e.g. 100M, 2G).";
+      };
+    };
   };
 
   config = lib.mkMerge [
@@ -222,6 +276,11 @@ in {
         services.restic_backup.backupPaths = simple.backupPaths;
         services.restic_backup.schedule = simple.backupTime;
         services.restic_backup.secret_file_path = simple.secret_file_path;
+        # Map exclude subtree
+        services.restic_backup.exclude.patterns = simple.exclude.patterns;
+        services.restic_backup.exclude.file = simple.exclude.file;
+        services.restic_backup.exclude.ifPresent = simple.exclude.ifPresent;
+        services.restic_backup.exclude.largerThan = simple.exclude.largerThan;
       })
 
     (lib.mkIf cfg.enable {
@@ -281,8 +340,25 @@ in {
       # Ensure the package and CLI wrapper are available in the system
       environment.systemPackages = [cfg.package cliWrapper];
 
-      # Persist non-secret configuration to /etc so manual runs can preload it
-      environment.etc."restic-backup-nonsecret.env".text = builtins.readFile envFile;
+      # If user supplied patterns (and no custom file), write/overwrite /etc/restic-backup.exclude
+      environment.etc."restic-backup.exclude" = lib.mkIf (cfg.exclude.file == null && cfg.exclude.patterns != []) {
+        text = (lib.concatStringsSep "\n" cfg.exclude.patterns) + "\n";
+      };
+
+      # Plain, unquoted env file for the binary to preload (no shell quoting)
+      environment.etc."restic-backup-nonsecret.env".text = let
+        lines =
+          [
+            ("AWS_DEFAULT_REGION=" + cfg.aws.defaultRegion)
+            ("BACKUP_PATHS=" + (lib.concatStringsSep "," cfg.backupPaths))
+          ]
+          ++ lib.optional (cfg.hostname != null) ("BACKUP_HOSTNAME=" + cfg.hostname)
+          ++ lib.optional (cfg.exclude.file != null) ("BACKUP_EXCLUDE_FILE=" + (toString cfg.exclude.file))
+          ++ lib.optional (cfg.exclude.file == null && cfg.exclude.patterns != []) "BACKUP_EXCLUDE_FILE=/etc/restic-backup.exclude"
+          ++ lib.optional (cfg.exclude.largerThan != null) ("BACKUP_EXCLUDE_LARGER_THAN=" + cfg.exclude.largerThan)
+          ++ lib.optional (cfg.exclude.ifPresent != []) ("BACKUP_EXCLUDE_IF_PRESENT=" + (lib.concatStringsSep "," cfg.exclude.ifPresent));
+      in
+        (lib.concatStringsSep "\n" lines) + "\n";
 
       # Show a concise summary during activation so rebuild output is informative
       system.activationScripts.resticBackupSummary = let

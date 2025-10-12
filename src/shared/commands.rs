@@ -166,11 +166,45 @@ impl ResticCommandExecutor {
     ) -> Result<String, BackupServiceError> {
         let path_str = path.to_string_lossy();
         let tag = determine_backup_tag(path)?;
+        let mut args: Vec<String> = vec![
+            "backup".to_string(),
+            path_str.to_string(),
+            "--host".to_string(),
+            hostname.to_string(),
+            "--tag".to_string(),
+            tag.to_string(),
+        ];
+
+        // Append official restic exclude options if provided via environment
+        if let Ok(exclude_file) = std::env::var("BACKUP_EXCLUDE_FILE") {
+            if !exclude_file.trim().is_empty() {
+                args.push("--exclude-file".to_string());
+                args.push(exclude_file);
+            }
+        }
+        if let Ok(markers) = std::env::var("BACKUP_EXCLUDE_IF_PRESENT") {
+            for marker in markers
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
+                args.push("--exclude-if-present".to_string());
+                args.push(marker.to_string());
+            }
+        }
+        if let Ok(sz) = std::env::var("BACKUP_EXCLUDE_LARGER_THAN") {
+            if !sz.trim().is_empty() {
+                args.push("--exclude-larger-than".to_string());
+                args.push(sz);
+            }
+        }
+
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
         self.executor
             .execute_restic_command(
                 &self.repo_url,
-                &["backup", &path_str, "--host", hostname, "--tag", tag],
+                &arg_refs,
                 &format!("backup {}", path_str),
                 show_live_output,
             )

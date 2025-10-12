@@ -21,6 +21,13 @@ AWS_S3_ENDPOINT=https://<endpoint>
 # Optional
 BACKUP_PATHS=/path/one,/path/two
 BACKUP_HOSTNAME=custom-host
+# Restic excludes (optional; official restic flags)
+# Path to an exclude file (one pattern per line)
+BACKUP_EXCLUDE_FILE=/etc/restic-backup.exclude
+# Comma-separated list of marker filenames for --exclude-if-present
+BACKUP_EXCLUDE_IF_PRESENT=.nobackup,CACHEDIR.TAG
+# Exclude files larger than this size (e.g., 100M, 2G)
+BACKUP_EXCLUDE_LARGER_THAN=2G
 ```
 
 Create a sample `.env`:
@@ -90,9 +97,40 @@ Import and configure:
       "/home/user/.config"
     ];
     secret_file_path = "/run/secrets/resticENV";  # env file path
+
+    # Official restic exclude support
+    # Option 1: provide patterns; module writes /etc/restic-backup.exclude and sets BACKUP_EXCLUDE_FILE
+    exclude.patterns = [
+      "*.vk3"                  # by extension
+      "**/node_modules/**"     # recursive folder pattern
+      "tmp/"                   # subfolder relative to each source
+      "My Exact File.txt"      # exact filename match anywhere
+    ];
+    # Option 2: use your own exclude file and point to it
+    # exclude.file = "/etc/my-restic.exclude";
+    # Optional: also exclude directories containing these marker files
+    exclude.ifPresent = [ "CACHEDIR.TAG" ".nobackup" ];
+    # Optional: skip very large files
+    exclude.largerThan = "2G";
   };
 }
 ```
+
+### Excluding files and directories (restic)
+
+This project supports restic's official exclude mechanisms during `backup`:
+
+- `--exclude-file <file>`: one pattern per line, comments `#` and blanks allowed.
+- `--exclude-if-present <name>`: skip any directory that contains the given file.
+- `--exclude-larger-than <size>`: skip files larger than size like `100M`, `2G`.
+
+Pattern tips (restic):
+
+- Patterns are matched against full paths; leading `/` anchors to the source root.
+- `*` matches inside a single path segment; `**` crosses directory boundaries.
+- Examples: `*.vk3`, `**/node_modules/**`, `tmp/`, `My Exact File.txt`, `/home/user/Downloads/*`.
+
+NixOS integration writes a persistent non-secret env file at `/etc/restic-backup-nonsecret.env` and, if `services.restic_backup.exclude.patterns` is set, a generated exclude file at `/etc/restic-backup.exclude`. Manual `restic-backup-service run` loads these automatically.
 
 Example secret file content (uppercase keys):
 
