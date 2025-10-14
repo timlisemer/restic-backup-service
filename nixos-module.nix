@@ -9,7 +9,7 @@
   # Default package - will be overridden when used through flake
   defaultPackage = pkgs.rustPlatform.buildRustPackage rec {
     pname = "restic-backup-service";
-    version = "1.1.3";
+    version = "1.1.4";
     src = ./.;
     cargoLock = {
       lockFile = ./Cargo.lock;
@@ -71,6 +71,10 @@
     ''}
 
     set +a
+
+    # Set log directory for service context
+    RBS_LOG_DIR=/var/log/restic-backup
+    export RBS_LOG_DIR
 
     # No pre-exec env validation here; failures will be handled at runtime by the program.
 
@@ -305,6 +309,7 @@ in {
           Type = "oneshot";
           User = cfg.user;
           Group = cfg.group;
+          WorkingDirectory = "/"; # Explicitly set to root to match default behavior
           ExecStart = "${backupScript}";
 
           # Security settings
@@ -319,6 +324,10 @@ in {
           StandardError = "journal";
           SyslogIdentifier = "restic-backup";
         };
+
+        preStart = ''
+          install -d -m 755 -o ${cfg.user} -g ${cfg.group} /var/log/restic-backup
+        '';
       };
 
       # Optional systemd timer for scheduled backups

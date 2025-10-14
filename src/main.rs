@@ -60,10 +60,13 @@ fn init_logging() -> Result<(), crate::errors::BackupServiceError> {
     use tracing_appender::rolling;
     use tracing_subscriber::{fmt::writer::MakeWriterExt, EnvFilter};
 
-    // Create logs directory if it doesn't exist
-    std::fs::create_dir_all("./logs")?;
+    // Get log directory from env var or default to ./logs
+    let log_dir = std::env::var("RBS_LOG_DIR").unwrap_or_else(|_| "./logs".to_string());
 
-    let file_appender = rolling::daily("./logs", "restic-backup.log");
+    // Create logs directory if it doesn't exist
+    std::fs::create_dir_all(&log_dir)?;
+
+    let file_appender = rolling::daily(&log_dir, "restic-backup.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));

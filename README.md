@@ -28,6 +28,8 @@ BACKUP_EXCLUDE_FILE=/etc/restic-backup.exclude
 BACKUP_EXCLUDE_IF_PRESENT=.nobackup,CACHEDIR.TAG
 # Exclude files larger than this size (e.g., 100M, 2G)
 BACKUP_EXCLUDE_LARGER_THAN=2G
+# Optional: Log directory (defaults to ./logs; set in systemd service to /var/log/restic-backup)
+RBS_LOG_DIR=/var/log/restic-backup
 ```
 
 Create a sample `.env`:
@@ -62,7 +64,7 @@ restic-backup-service restore
 restic-backup-service restore --host HOST --path "/path/one" --timestamp "2025-01-15T10:30:00Z"
 ```
 
-Logs: `./logs/restic-backup.log.YYYY-MM-DD` and stdout.
+Logs: `${RBS_LOG_DIR:-./logs}/restic-backup.log.YYYY-MM-DD` and stdout.
 
 ## NixOS (flake module)
 
