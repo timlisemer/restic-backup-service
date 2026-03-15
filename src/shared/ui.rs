@@ -337,10 +337,12 @@ mod tests {
         let result = select_repositories(backup_data, path_opt).await;
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("No repositories selected"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No repositories selected")
+        );
     }
 
     #[tokio::test]
@@ -373,10 +375,12 @@ mod tests {
 
         let result = select_timestamp(&repos, None).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("No snapshots found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No snapshots found")
+        );
     }
 
     #[test]

@@ -39,7 +39,9 @@ impl BackupWorkflow {
         let all_paths = self.prepare_backup_paths().await?;
 
         if all_paths.is_empty() {
-            warn!("No paths configured for backup. Use BACKUP_PATHS in .env or specify paths via command line.");
+            warn!(
+                "No paths configured for backup. Use BACKUP_PATHS in .env or specify paths via command line."
+            );
             return Ok(());
         }
 

@@ -58,7 +58,7 @@ enum Commands {
 
 fn init_logging() -> Result<(), crate::errors::BackupServiceError> {
     use tracing_appender::rolling;
-    use tracing_subscriber::{fmt::writer::MakeWriterExt, EnvFilter};
+    use tracing_subscriber::{EnvFilter, fmt::writer::MakeWriterExt};
 
     // Get log directory from env var or default to ./logs
     let log_dir = std::env::var("RBS_LOG_DIR").unwrap_or_else(|_| "./logs".to_string());
@@ -115,7 +115,8 @@ fn preload_env_files() {
                     val.pop();
                 }
                 if std::env::var_os(key).is_none() {
-                    std::env::set_var(key, val);
+                    // SAFETY: Called during init before the async runtime starts.
+                    unsafe { std::env::set_var(key, val) };
                 }
             }
         }
@@ -124,10 +125,10 @@ fn preload_env_files() {
     // Load system then local, literally
     // Also load persistent non-secret config produced by the NixOS module
     load_env_literal("/etc/restic-backup-nonsecret.env");
-    if let Ok(secret_path) = std::env::var("BACKUP_SECRETS_FILE") {
-        if !secret_path.trim().is_empty() {
-            load_env_literal(&secret_path);
-        }
+    if let Ok(secret_path) = std::env::var("BACKUP_SECRETS_FILE")
+        && !secret_path.trim().is_empty()
+    {
+        load_env_literal(&secret_path);
     }
     load_env_literal(".env");
 }

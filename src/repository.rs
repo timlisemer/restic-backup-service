@@ -88,7 +88,6 @@ mod tests {
             "/home/alice/projects",
             "/home/user123/data",
             "/home/user-name/files",
-
             "/home/user/.local/share/Paradox Interactive",
             "/home/gamer/Documents/My Games",
             "/home/user/Software Installation Files",
@@ -99,7 +98,6 @@ mod tests {
             "/home/user/Music/My Favorite Songs",
             "/home/gamer/.local/share/Steam Games",
             "/home/user/Videos/Home Movies Collection",
-
             "/home/developer/Coding",
             "/home/user/Desktop",
             "/home/alice/.mozilla",

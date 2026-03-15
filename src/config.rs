@@ -20,15 +20,16 @@ impl Config {
         // If a secrets file has been specified, verify it is readable for the current user.
         if let Ok(secrets_path) = std::env::var("BACKUP_SECRETS_FILE") {
             let path = std::path::Path::new(&secrets_path);
-            if path.exists() {
-                if let Err(e) = std::fs::File::open(path) {
-                    if e.kind() == std::io::ErrorKind::PermissionDenied {
-                        return Err(BackupServiceError::ConfigurationError(format!(
-                            "Cannot read secrets file: {}.\n\nThe current user lacks read permission. Try running with elevated privileges (e.g., sudo) or adjust file permissions to allow read access.",
-                            secrets_path
-                        )));
-                    }
-                }
+            if path.exists()
+                && matches!(
+                    std::fs::File::open(path),
+                    Err(ref e) if e.kind() == std::io::ErrorKind::PermissionDenied
+                )
+            {
+                return Err(BackupServiceError::ConfigurationError(format!(
+                    "Cannot read secrets file: {}.\n\nThe current user lacks read permission. Try running with elevated privileges (e.g., sudo) or adjust file permissions to allow read access.",
+                    secrets_path
+                )));
             }
         }
 
@@ -78,12 +79,12 @@ impl Config {
 
     pub fn s3_endpoint(&self) -> Result<String, BackupServiceError> {
         // Parse endpoint from s3:https://domain.com/bucket/path format
-        if let Some(endpoint) = self.restic_repo_base.strip_prefix("s3:") {
-            if let Some(protocol_end) = endpoint.find("://") {
-                let after_protocol = &endpoint[protocol_end + 3..];
-                if let Some(path_start) = after_protocol.find('/') {
-                    return Ok(endpoint[..protocol_end + 3 + path_start].to_string());
-                }
+        if let Some(endpoint) = self.restic_repo_base.strip_prefix("s3:")
+            && let Some(protocol_end) = endpoint.find("://")
+        {
+            let after_protocol = &endpoint[protocol_end + 3..];
+            if let Some(path_start) = after_protocol.find('/') {
+                return Ok(endpoint[..protocol_end + 3 + path_start].to_string());
             }
         }
         Ok(self.aws_s3_endpoint.clone())
@@ -91,16 +92,16 @@ impl Config {
 
     pub fn s3_bucket(&self) -> Result<String, BackupServiceError> {
         // Extract bucket name from s3:https://domain.com/bucket/path
-        if let Some(s3_path) = self.restic_repo_base.strip_prefix("s3:") {
-            if let Some(path_start) = s3_path.find("//") {
-                let path = &s3_path[path_start + 2..];
-                if let Some(slash_pos) = path.find('/') {
-                    let after_domain = &path[slash_pos + 1..];
-                    if let Some(next_slash) = after_domain.find('/') {
-                        return Ok(after_domain[..next_slash].to_string());
-                    }
-                    return Ok(after_domain.to_string());
+        if let Some(s3_path) = self.restic_repo_base.strip_prefix("s3:")
+            && let Some(path_start) = s3_path.find("//")
+        {
+            let path = &s3_path[path_start + 2..];
+            if let Some(slash_pos) = path.find('/') {
+                let after_domain = &path[slash_pos + 1..];
+                if let Some(next_slash) = after_domain.find('/') {
+                    return Ok(after_domain[..next_slash].to_string());
                 }
+                return Ok(after_domain.to_string());
             }
         }
         Err(BackupServiceError::ConfigurationError(format!(
@@ -110,14 +111,14 @@ impl Config {
     }
 
     pub fn s3_base_path(&self) -> Result<String, BackupServiceError> {
-        if let Some(s3_path) = self.restic_repo_base.strip_prefix("s3:") {
-            if let Some(path_start) = s3_path.find("//") {
-                let path = &s3_path[path_start + 2..];
-                if let Some(slash_pos) = path.find('/') {
-                    let after_domain = &path[slash_pos + 1..];
-                    if let Some(next_slash) = after_domain.find('/') {
-                        return Ok(after_domain[next_slash + 1..].to_string());
-                    }
+        if let Some(s3_path) = self.restic_repo_base.strip_prefix("s3:")
+            && let Some(path_start) = s3_path.find("//")
+        {
+            let path = &s3_path[path_start + 2..];
+            if let Some(slash_pos) = path.find('/') {
+                let after_domain = &path[slash_pos + 1..];
+                if let Some(next_slash) = after_domain.find('/') {
+                    return Ok(after_domain[next_slash + 1..].to_string());
                 }
             }
         }
@@ -126,11 +127,14 @@ impl Config {
 
     // Set environment variables for AWS SDK/CLI usage
     pub fn set_aws_env(&self) -> Result<(), BackupServiceError> {
-        env::set_var("AWS_ACCESS_KEY_ID", &self.aws_access_key_id);
-        env::set_var("AWS_SECRET_ACCESS_KEY", &self.aws_secret_access_key);
-        env::set_var("AWS_DEFAULT_REGION", &self.aws_default_region);
-        env::set_var("AWS_S3_ENDPOINT", &self.aws_s3_endpoint);
-        env::set_var("RESTIC_PASSWORD", &self.restic_password);
+        // SAFETY: Called once at startup before spawning threads or async tasks.
+        unsafe {
+            env::set_var("AWS_ACCESS_KEY_ID", &self.aws_access_key_id);
+            env::set_var("AWS_SECRET_ACCESS_KEY", &self.aws_secret_access_key);
+            env::set_var("AWS_DEFAULT_REGION", &self.aws_default_region);
+            env::set_var("AWS_S3_ENDPOINT", &self.aws_s3_endpoint);
+            env::set_var("RESTIC_PASSWORD", &self.restic_password);
+        }
         Ok(())
     }
 
@@ -399,11 +403,7 @@ mod tests {
     #[test]
     fn test_backup_paths_parsing() -> Result<(), BackupServiceError> {
         // Test parsing of comma-separated backup paths similar to NixOS style
-        use std::env;
-
-        // Set up test environment variable
         let test_paths = "/home/user/Projects,/home/user/Downloads,/home/user/.config,/home/user/.steam,/home/user/.local/share/Paradox Interactive,/home/user/.local/share/Steam/steamapps/common/My Game";
-        env::set_var("BACKUP_PATHS", test_paths);
 
         // Test parsing (parse the test string directly to avoid env interference)
         let parsed_paths: Vec<PathBuf> = test_paths
@@ -445,11 +445,8 @@ mod tests {
 
     #[test]
     fn test_backup_paths_trailing_slash_trimming() -> Result<(), BackupServiceError> {
-        use std::env;
-
         // Test that trailing slashes are properly trimmed from backup paths
         let test_paths_with_slashes = "/home/user/Documents/,/home/user/.local/share/Paradox Interactive/,/home/user/Projects,/home/user/.config/";
-        env::set_var("BACKUP_PATHS", test_paths_with_slashes);
 
         // Use the actual parsing logic on the test string directly
         let parsed_paths: Vec<PathBuf> = test_paths_with_slashes

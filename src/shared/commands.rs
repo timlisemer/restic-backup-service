@@ -176,11 +176,11 @@ impl ResticCommandExecutor {
         ];
 
         // Append official restic exclude options if provided via environment
-        if let Ok(exclude_file) = std::env::var("BACKUP_EXCLUDE_FILE") {
-            if !exclude_file.trim().is_empty() {
-                args.push("--exclude-file".to_string());
-                args.push(exclude_file);
-            }
+        if let Ok(exclude_file) = std::env::var("BACKUP_EXCLUDE_FILE")
+            && !exclude_file.trim().is_empty()
+        {
+            args.push("--exclude-file".to_string());
+            args.push(exclude_file);
         }
         if let Ok(markers) = std::env::var("BACKUP_EXCLUDE_IF_PRESENT") {
             for marker in markers
@@ -192,11 +192,11 @@ impl ResticCommandExecutor {
                 args.push(marker.to_string());
             }
         }
-        if let Ok(sz) = std::env::var("BACKUP_EXCLUDE_LARGER_THAN") {
-            if !sz.trim().is_empty() {
-                args.push("--exclude-larger-than".to_string());
-                args.push(sz);
-            }
+        if let Ok(sz) = std::env::var("BACKUP_EXCLUDE_LARGER_THAN")
+            && !sz.trim().is_empty()
+        {
+            args.push("--exclude-larger-than".to_string());
+            args.push(sz);
         }
 
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -255,10 +255,10 @@ impl ResticCommandExecutor {
             )
             .await?;
 
-        if let Ok(stats) = serde_json::from_str::<Value>(&output) {
-            if let Some(total_size) = stats["total_size"].as_u64() {
-                return Ok(total_size);
-            }
+        if let Ok(stats) = serde_json::from_str::<Value>(&output)
+            && let Some(total_size) = stats["total_size"].as_u64()
+        {
+            return Ok(total_size);
         }
         Ok(0)
     }

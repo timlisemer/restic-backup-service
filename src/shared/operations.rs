@@ -7,8 +7,8 @@ use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
 };
 use tracing::{info, warn};
 
@@ -190,7 +190,7 @@ impl RepositoryOperations {
                     return Err(BackupServiceError::CommandFailed(format!(
                         "Task join error: {}",
                         join_error
-                    )))
+                    )));
                 }
             }
         }
@@ -887,37 +887,60 @@ mod tests {
                 "user_home/gamer/.local_share_Paradox Interactive",
                 "user_home",
                 vec![
-                    create_test_snapshot("2025-01-15T10:30:00Z", "/home/gamer/.local/share/Paradox Interactive", "game1"),
-                    create_test_snapshot("2025-01-15T11:00:00Z", "/home/gamer/.local/share/Paradox Interactive", "game2"),
+                    create_test_snapshot(
+                        "2025-01-15T10:30:00Z",
+                        "/home/gamer/.local/share/Paradox Interactive",
+                        "game1",
+                    ),
+                    create_test_snapshot(
+                        "2025-01-15T11:00:00Z",
+                        "/home/gamer/.local/share/Paradox Interactive",
+                        "game2",
+                    ),
                 ],
             ),
             create_test_repo_data(
                 "/home/user/.config/Google Chrome",
                 "user_home/user/.config_Google Chrome",
                 "user_home",
-                vec![
-                    create_test_snapshot("2025-01-15T09:30:00Z", "/home/user/.config/Google Chrome", "browser1"),
-                ],
+                vec![create_test_snapshot(
+                    "2025-01-15T09:30:00Z",
+                    "/home/user/.config/Google Chrome",
+                    "browser1",
+                )],
             ),
             create_test_repo_data(
                 "/mnt/docker-data/volumes/my app data",
                 "docker_volume/my app data",
                 "docker_volume",
                 vec![
-                    create_test_snapshot("2025-01-15T08:00:00Z", "/mnt/docker-data/volumes/my app data", "docker1"),
-                    create_test_snapshot("2025-01-15T08:30:00Z", "/mnt/docker-data/volumes/my app data", "docker2"),
-                    create_test_snapshot("2025-01-15T09:00:00Z", "/mnt/docker-data/volumes/my app data", "docker3"),
+                    create_test_snapshot(
+                        "2025-01-15T08:00:00Z",
+                        "/mnt/docker-data/volumes/my app data",
+                        "docker1",
+                    ),
+                    create_test_snapshot(
+                        "2025-01-15T08:30:00Z",
+                        "/mnt/docker-data/volumes/my app data",
+                        "docker2",
+                    ),
+                    create_test_snapshot(
+                        "2025-01-15T09:00:00Z",
+                        "/mnt/docker-data/volumes/my app data",
+                        "docker3",
+                    ),
                 ],
             ),
             create_test_repo_data(
                 "/usr/share/applications/Visual Studio Code",
                 "system/usr_share_applications_Visual Studio Code",
                 "system",
-                vec![
-                    create_test_snapshot("2025-01-15T07:30:00Z", "/usr/share/applications/Visual Studio Code", "app1"),
-                ],
+                vec![create_test_snapshot(
+                    "2025-01-15T07:30:00Z",
+                    "/usr/share/applications/Visual Studio Code",
+                    "app1",
+                )],
             ),
-
             // NixOS-style backup paths (similar to user's configuration)
             create_test_repo_data(
                 "/home/developer/Coding",
@@ -932,17 +955,21 @@ mod tests {
                 "/home/user/.vscode-server",
                 "user_home/user/.vscode-server",
                 "user_home",
-                vec![
-                    create_test_snapshot("2025-01-15T06:00:00Z", "/home/user/.vscode-server", "vscode1"),
-                ],
+                vec![create_test_snapshot(
+                    "2025-01-15T06:00:00Z",
+                    "/home/user/.vscode-server",
+                    "vscode1",
+                )],
             ),
             create_test_repo_data(
                 "/home/gamer/.local/share/Steam/steamapps/compatdata/567890/pfx/drive_c/users/steamuser/Documents/Game Data",
                 "user_home/gamer/.local_share_Steam_steamapps_compatdata_567890_pfx_drive_c_users_steamuser_Documents_Game Data",
                 "user_home",
-                vec![
-                    create_test_snapshot("2025-01-15T05:00:00Z", "/home/gamer/.local/share/Steam/steamapps/compatdata/567890/pfx/drive_c/users/steamuser/Documents/Game Data", "steam1"),
-                ],
+                vec![create_test_snapshot(
+                    "2025-01-15T05:00:00Z",
+                    "/home/gamer/.local/share/Steam/steamapps/compatdata/567890/pfx/drive_c/users/steamuser/Documents/Game Data",
+                    "steam1",
+                )],
             ),
         ];
 

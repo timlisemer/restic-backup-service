@@ -3,8 +3,8 @@ use crate::errors::BackupServiceError;
 use crate::shared::commands::{ResticCommandExecutor, S3CommandExecutor};
 use crate::shared::operations::{RepositoryOperations, RepositorySelectionItem};
 use crate::shared::ui::{
-    confirm_action, select_host, select_repositories, select_timestamp, HostSelection,
-    RepositorySelection, TimestampSelection,
+    HostSelection, RepositorySelection, TimestampSelection, confirm_action, select_host,
+    select_repositories, select_timestamp,
 };
 use crate::utils::validate_credentials;
 use chrono::{DateTime, Duration, Utc};
