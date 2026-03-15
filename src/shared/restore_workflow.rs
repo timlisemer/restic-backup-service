@@ -60,6 +60,7 @@ impl RestoreWorkflow {
 
         // Phase 5: Restoration
         self.execute_restoration_phase(
+            &host_selection.selected_host,
             &repository_selection.selected_repos,
             &timestamp_selection.selected_timestamp,
         )
@@ -139,6 +140,7 @@ impl RestoreWorkflow {
     /// Phase 5: Restoration
     async fn execute_restoration_phase(
         &self,
+        selected_host: &str,
         selected_repos: &[RepositorySelectionItem],
         selected_timestamp: &DateTime<Utc>,
     ) -> Result<(), BackupServiceError> {
@@ -160,7 +162,7 @@ impl RestoreWorkflow {
         info!(destination = %dest_dir.display(), "Restoring to destination");
 
         let (restored_count, skipped_count) = self
-            .restore_repositories(selected_repos, selected_timestamp, &dest_dir)
+            .restore_repositories(selected_host, selected_repos, selected_timestamp, &dest_dir)
             .await?;
 
         // Display detailed summary
@@ -186,6 +188,7 @@ impl RestoreWorkflow {
     /// Restore all selected repositories
     async fn restore_repositories(
         &self,
+        selected_host: &str,
         selected_repos: &[RepositorySelectionItem],
         selected_timestamp: &DateTime<Utc>,
         dest_dir: &Path,
@@ -203,7 +206,9 @@ impl RestoreWorkflow {
                 "Restoring repository"
             );
 
-            let repo_url = self.config.get_repo_url(&repo.repo_subpath)?;
+            let repo_url = self
+                .config
+                .get_repo_url_for_host(selected_host, &repo.repo_subpath)?;
 
             let window_end = *selected_timestamp + Duration::minutes(5);
             let best_snapshot = repo
@@ -236,7 +241,8 @@ impl RestoreWorkflow {
                     .await?;
 
                 // Check if the restoration was empty (like old script detection)
-                let restored_path = dest_dir.join(repo.path.strip_prefix("/").unwrap_or(&repo.path));
+                let restored_path =
+                    dest_dir.join(repo.path.strip_prefix("/").unwrap_or(&repo.path));
                 let is_empty = if restored_path.exists() {
                     std::fs::read_dir(&restored_path)
                         .map(|mut entries| entries.next().is_none())
@@ -323,25 +329,52 @@ impl RestoreWorkflow {
 
         for repo in selected_repos {
             let src = dest_dir.join(repo.path.strip_prefix("/").unwrap_or(&repo.path));
-            if src.exists() {
-                // Ensure the full destination path exists, not just the parent
-                if let Some(parent) = repo.path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-
-                // Remove existing destination if it exists
-                if repo.path.exists() {
-                    if repo.path.is_dir() {
-                        fs::remove_dir_all(&repo.path)?;
-                    } else {
-                        fs::remove_file(&repo.path)?;
-                    }
-                }
-
-                // Use recursive copy function
-                copy_recursively(&src, &repo.path)?;
-                info!(path = %repo.path.display(), "Copied");
+            if !src.exists() {
+                warn!(
+                    source = %src.display(),
+                    original_path = %repo.path.display(),
+                    "Restored source not found, skipping"
+                );
+                continue;
             }
+
+            let dst = &repo.path;
+            info!(source = %src.display(), destination = %dst.display(), "Copying");
+
+            // Ensure the parent directory exists
+            if let Some(parent) = dst.parent() {
+                fs::create_dir_all(parent).map_err(|e| {
+                    BackupServiceError::CommandFailed(format!(
+                        "Failed to create directory '{}': {}",
+                        parent.display(),
+                        e
+                    ))
+                })?;
+            }
+
+            // Remove existing destination if it exists
+            if dst.exists() {
+                if dst.is_dir() {
+                    fs::remove_dir_all(dst).map_err(|e| {
+                        BackupServiceError::CommandFailed(format!(
+                            "Failed to remove existing directory '{}': {}",
+                            dst.display(),
+                            e
+                        ))
+                    })?;
+                } else {
+                    fs::remove_file(dst).map_err(|e| {
+                        BackupServiceError::CommandFailed(format!(
+                            "Failed to remove existing file '{}': {}",
+                            dst.display(),
+                            e
+                        ))
+                    })?;
+                }
+            }
+
+            copy_recursively(&src, dst)?;
+            info!(path = %dst.display(), "Copied");
         }
 
         Ok(())
@@ -357,32 +390,72 @@ impl RestoreWorkflow {
 
         for repo in selected_repos {
             let src = dest_dir.join(repo.path.strip_prefix("/").unwrap_or(&repo.path));
-            if src.exists() {
-                // Ensure the full destination path structure exists
-                if let Some(parent) = repo.path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-
-                // Remove existing destination if it exists
-                if repo.path.exists() {
-                    if repo.path.is_dir() {
-                        fs::remove_dir_all(&repo.path)?;
-                    } else {
-                        fs::remove_file(&repo.path)?;
-                    }
-                }
-
-                // Try rename first, fallback to copy+delete for cross-filesystem
-                if fs::rename(&src, &repo.path).is_err() {
-                    copy_recursively(&src, &repo.path)?;
-                    if src.is_dir() {
-                        fs::remove_dir_all(&src)?;
-                    } else {
-                        fs::remove_file(&src)?;
-                    }
-                }
-                info!(path = %repo.path.display(), "Moved");
+            if !src.exists() {
+                warn!(
+                    source = %src.display(),
+                    original_path = %repo.path.display(),
+                    "Restored source not found, skipping"
+                );
+                continue;
             }
+
+            let dst = &repo.path;
+            info!(source = %src.display(), destination = %dst.display(), "Moving");
+
+            // Ensure the parent directory exists
+            if let Some(parent) = dst.parent() {
+                fs::create_dir_all(parent).map_err(|e| {
+                    BackupServiceError::CommandFailed(format!(
+                        "Failed to create directory '{}': {}",
+                        parent.display(),
+                        e
+                    ))
+                })?;
+            }
+
+            // Remove existing destination if it exists
+            if dst.exists() {
+                if dst.is_dir() {
+                    fs::remove_dir_all(dst).map_err(|e| {
+                        BackupServiceError::CommandFailed(format!(
+                            "Failed to remove existing directory '{}': {}",
+                            dst.display(),
+                            e
+                        ))
+                    })?;
+                } else {
+                    fs::remove_file(dst).map_err(|e| {
+                        BackupServiceError::CommandFailed(format!(
+                            "Failed to remove existing file '{}': {}",
+                            dst.display(),
+                            e
+                        ))
+                    })?;
+                }
+            }
+
+            // Try rename first, fallback to copy+delete for cross-filesystem
+            if fs::rename(&src, dst).is_err() {
+                copy_recursively(&src, dst)?;
+                if src.is_dir() {
+                    fs::remove_dir_all(&src).map_err(|e| {
+                        BackupServiceError::CommandFailed(format!(
+                            "Failed to clean up source '{}': {}",
+                            src.display(),
+                            e
+                        ))
+                    })?;
+                } else {
+                    fs::remove_file(&src).map_err(|e| {
+                        BackupServiceError::CommandFailed(format!(
+                            "Failed to clean up source '{}': {}",
+                            src.display(),
+                            e
+                        ))
+                    })?;
+                }
+            }
+            info!(path = %dst.display(), "Moved");
         }
 
         fs::remove_dir_all(dest_dir).ok();
@@ -393,8 +466,20 @@ impl RestoreWorkflow {
 /// Recursively copy files and directories
 fn copy_recursively(src: &Path, dst: &Path) -> Result<(), BackupServiceError> {
     if src.is_dir() {
-        fs::create_dir_all(dst)?;
-        for entry in fs::read_dir(src)? {
+        fs::create_dir_all(dst).map_err(|e| {
+            BackupServiceError::CommandFailed(format!(
+                "Failed to create directory '{}': {}",
+                dst.display(),
+                e
+            ))
+        })?;
+        for entry in fs::read_dir(src).map_err(|e| {
+            BackupServiceError::CommandFailed(format!(
+                "Failed to read directory '{}': {}",
+                src.display(),
+                e
+            ))
+        })? {
             let entry = entry?;
             let src_path = entry.path();
             let dst_path = dst.join(entry.file_name());
@@ -402,9 +487,115 @@ fn copy_recursively(src: &Path, dst: &Path) -> Result<(), BackupServiceError> {
         }
     } else {
         if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).map_err(|e| {
+                BackupServiceError::CommandFailed(format!(
+                    "Failed to create directory '{}': {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
         }
-        fs::copy(src, dst)?;
+        fs::copy(src, dst).map_err(|e| {
+            BackupServiceError::CommandFailed(format!(
+                "Failed to copy '{}' to '{}': {}",
+                src.display(),
+                dst.display(),
+                e
+            ))
+        })?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::errors::BackupServiceError;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_copy_recursively_basic() -> Result<(), BackupServiceError> {
+        let src_dir = tempdir().unwrap();
+        let dst_dir = tempdir().unwrap();
+
+        // Create source structure: file.txt, subdir/nested.txt
+        fs::write(src_dir.path().join("file.txt"), "hello").unwrap();
+        fs::create_dir(src_dir.path().join("subdir")).unwrap();
+        fs::write(src_dir.path().join("subdir/nested.txt"), "world").unwrap();
+
+        let dst = dst_dir.path().join("output");
+        copy_recursively(src_dir.path(), &dst)?;
+
+        assert_eq!(fs::read_to_string(dst.join("file.txt")).unwrap(), "hello");
+        assert_eq!(
+            fs::read_to_string(dst.join("subdir/nested.txt")).unwrap(),
+            "world"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_copy_recursively_nested() -> Result<(), BackupServiceError> {
+        let src_dir = tempdir().unwrap();
+        let dst_dir = tempdir().unwrap();
+
+        // Create deeply nested structure
+        let deep = src_dir.path().join("a/b/c/d");
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("deep.txt"), "deep content").unwrap();
+        fs::write(src_dir.path().join("a/top.txt"), "top content").unwrap();
+
+        let dst = dst_dir.path().join("output");
+        copy_recursively(src_dir.path(), &dst)?;
+
+        assert_eq!(
+            fs::read_to_string(dst.join("a/b/c/d/deep.txt")).unwrap(),
+            "deep content"
+        );
+        assert_eq!(
+            fs::read_to_string(dst.join("a/top.txt")).unwrap(),
+            "top content"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_copy_recursively_error_includes_source_path() {
+        let nonexistent = Path::new("/tmp/restic_test_nonexistent_src_abc123");
+        let dst = Path::new("/tmp/restic_test_dst_abc123");
+
+        let result = copy_recursively(nonexistent, dst);
+        assert!(result.is_err());
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("restic_test_nonexistent_src_abc123"),
+            "Error should contain source path, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_copy_recursively_error_includes_dest_path() {
+        let src_dir = tempdir().unwrap();
+        fs::write(src_dir.path().join("file.txt"), "data").unwrap();
+
+        // Try to copy a file to a path where a component is a file (not a dir)
+        let blocker = src_dir.path().join("blocker");
+        fs::write(&blocker, "i am a file").unwrap();
+        let invalid_dst = blocker.join("subdir").join("output");
+
+        let result = copy_recursively(&src_dir.path().join("file.txt"), &invalid_dst);
+        assert!(result.is_err());
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("blocker"),
+            "Error should contain destination path context, got: {}",
+            err_msg
+        );
+    }
 }

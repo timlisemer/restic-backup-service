@@ -2,12 +2,10 @@ use crate::config::Config;
 use crate::errors::BackupServiceError;
 use crate::repository::BackupRepo;
 use crate::shared::commands::{ResticCommandExecutor, S3CommandExecutor};
-use crate::shared::constants::{
-    CATEGORY_DOCKER_VOLUME, CATEGORY_SYSTEM, CATEGORY_USER_HOME,
-};
+use crate::shared::constants::{CATEGORY_DOCKER_VOLUME, CATEGORY_SYSTEM, CATEGORY_USER_HOME};
 use chrono::{DateTime, Utc};
-use std::path::PathBuf;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
@@ -63,7 +61,6 @@ pub struct SnapshotItem {
 // Main repository operations manager with scanning capabilities
 pub struct RepositoryOperations {
     config: Config,
-    snapshot_collector: SnapshotCollector,
     s3_executor: S3CommandExecutor,
 }
 
@@ -71,16 +68,15 @@ pub struct RepositoryOperations {
 #[derive(Clone)]
 pub struct SnapshotCollector {
     config: Config,
+    hostname: String,
     path_cache: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl RepositoryOperations {
     pub fn new(config: Config) -> Result<Self, BackupServiceError> {
-        let snapshot_collector = SnapshotCollector::new(config.clone())?;
         let s3_executor = S3CommandExecutor::new(config.clone())?;
         Ok(Self {
             config,
-            snapshot_collector,
             s3_executor,
         })
     }
@@ -124,11 +120,13 @@ impl RepositoryOperations {
 
         info!("Found {} repositories to check", total_repos);
 
+        let snapshot_collector = SnapshotCollector::new(self.config.clone(), hostname)?;
+
         // Parallel execution: spawn concurrent tasks for repository checking
         let mut tasks = Vec::new();
 
         for unscanned_repo in all_repo_infos {
-            let snapshot_collector = self.snapshot_collector.clone();
+            let snapshot_collector = snapshot_collector.clone();
             let counter_clone = counter.clone();
 
             // Each repository is checked concurrently using tokio::spawn
@@ -137,9 +135,7 @@ impl RepositoryOperations {
                 let repo_subpath = &unscanned_repo.repo_subpath;
 
                 // Get snapshots first, which will cache the actual path
-                let result = snapshot_collector
-                    .get_snapshots(repo_subpath)
-                    .await;
+                let result = snapshot_collector.get_snapshots(repo_subpath).await;
 
                 match result {
                     Ok((count, snapshots)) => {
@@ -149,12 +145,7 @@ impl RepositoryOperations {
                                 .get_cached_native_path(repo_subpath)
                                 .unwrap_or_else(|| "unknown_path".to_string());
 
-                            info!(
-                                "Checking ({}/{}) - {}",
-                                current,
-                                total_repos,
-                                actual_path
-                            );
+                            info!("Checking ({}/{}) - {}", current, total_repos, actual_path);
 
                             info!("({}/{}) - {} snapshots found", current, total_repos, count);
 
@@ -173,9 +164,7 @@ impl RepositoryOperations {
                         } else {
                             warn!(
                                 "({}/{}) - No snapshots found for repo: {}",
-                                current,
-                                total_repos,
-                                repo_subpath
+                                current, total_repos, repo_subpath
                             );
                             Ok::<Option<RepositoryData>, BackupServiceError>(None)
                         }
@@ -183,10 +172,7 @@ impl RepositoryOperations {
                     Err(e) => {
                         warn!(
                             "({}/{}) - Failed to get snapshots for repo '{}': {}",
-                            current,
-                            total_repos,
-                            repo_subpath,
-                            e
+                            current, total_repos, repo_subpath, e
                         );
                         Ok::<Option<RepositoryData>, BackupServiceError>(None)
                     }
@@ -282,10 +268,9 @@ impl RepositoryOperations {
                     for subdir in subdirs {
                         let repo_subpath = format!("user_home/{}/{}", user, subdir);
 
-                        repos.push(self.create_unscanned_repository(
-                            repo_subpath,
-                            CATEGORY_USER_HOME,
-                        ));
+                        repos.push(
+                            self.create_unscanned_repository(repo_subpath, CATEGORY_USER_HOME),
+                        );
                     }
                 }
             }
@@ -304,10 +289,7 @@ impl RepositoryOperations {
             for volume in volumes {
                 let repo_subpath = format!("docker_volume/{}", volume);
 
-                repos.push(self.create_unscanned_repository(
-                    repo_subpath,
-                    CATEGORY_DOCKER_VOLUME,
-                ));
+                repos.push(self.create_unscanned_repository(repo_subpath, CATEGORY_DOCKER_VOLUME));
             }
         }
 
@@ -401,8 +383,9 @@ impl RepositoryOperations {
 }
 
 impl SnapshotCollector {
-    pub fn new(config: Config) -> Result<Self, BackupServiceError> {
+    pub fn new(config: Config, hostname: &str) -> Result<Self, BackupServiceError> {
         Ok(Self {
+            hostname: hostname.to_string(),
             config,
             path_cache: Arc::new(Mutex::new(HashMap::new())),
         })
@@ -413,12 +396,12 @@ impl SnapshotCollector {
         &self,
         repo_subpath: &str,
     ) -> Result<(usize, Vec<SnapshotInfo>), BackupServiceError> {
-        let repo_url = self.config.get_repo_url(repo_subpath)?;
+        let repo_url = self
+            .config
+            .get_repo_url_for_host(&self.hostname, repo_subpath)?;
         let restic_cmd = ResticCommandExecutor::new(self.config.clone(), repo_url)?;
 
-        let snapshots = restic_cmd
-            .snapshots()
-            .await?;
+        let snapshots = restic_cmd.snapshots().await?;
         let count = snapshots.len();
 
         // Extract actual path from first snapshot and cache it

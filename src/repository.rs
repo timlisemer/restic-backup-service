@@ -31,7 +31,8 @@ impl BackupRepo {
         let path_str = self.native_path.to_string_lossy();
 
         // Path categorization logic - drives backup organization structure
-        let result = if path_str.starts_with(HOME_DIR_WITH_SLASH) && path_str != HOME_DIR_WITH_SLASH {
+        let result = if path_str.starts_with(HOME_DIR_WITH_SLASH) && path_str != HOME_DIR_WITH_SLASH
+        {
             CATEGORY_USER_HOME
         } else if path_str.starts_with(DOCKER_VOLUMES_DIR_WITH_SLASH)
             && path_str != DOCKER_VOLUMES_DIR_WITH_SLASH
@@ -195,7 +196,6 @@ mod tests {
 
     #[test]
     fn test_category_edge_cases() -> Result<(), BackupServiceError> {
-
         let repo1 = BackupRepo::new(PathBuf::from("/home"))?; // Just /home, not a user directory
         assert_eq!(repo1.category()?, "system"); // Should be system, not user_home
 

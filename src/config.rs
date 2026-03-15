@@ -136,9 +136,18 @@ impl Config {
 
     // Construct final restic repository URL with hostname and subpath
     pub fn get_repo_url(&self, subpath: &str) -> Result<String, BackupServiceError> {
+        self.get_repo_url_for_host(&self.hostname, subpath)
+    }
+
+    // Construct final restic repository URL with an explicit hostname override
+    pub fn get_repo_url_for_host(
+        &self,
+        hostname: &str,
+        subpath: &str,
+    ) -> Result<String, BackupServiceError> {
         Ok(format!(
             "{}/{}/{}",
-            self.restic_repo_base, self.hostname, subpath
+            self.restic_repo_base, hostname, subpath
         ))
     }
 
@@ -460,6 +469,63 @@ mod tests {
         assert_eq!(parsed_paths[3], PathBuf::from("/home/user/.config"));
 
         // No env cleanup needed
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_repo_url_for_host_uses_explicit_hostname() -> Result<(), BackupServiceError> {
+        let config = create_test_config("s3:https://s3.amazonaws.com/my-bucket/restic");
+
+        // config.hostname is "test-host", but we pass "remote-host"
+        let url = config.get_repo_url_for_host("remote-host", "docker_volume/immich")?;
+        assert_eq!(
+            url,
+            "s3:https://s3.amazonaws.com/my-bucket/restic/remote-host/docker_volume/immich"
+        );
+        assert!(!url.contains("test-host"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_repo_url_delegates_to_for_host() -> Result<(), BackupServiceError> {
+        let config = create_test_config("s3:https://s3.amazonaws.com/my-bucket/restic");
+
+        let subpath = "user_home/tim/Coding";
+        assert_eq!(
+            config.get_repo_url(subpath)?,
+            config.get_repo_url_for_host("test-host", subpath)?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_repo_url_for_host_cross_host_scenario() -> Result<(), BackupServiceError> {
+        // Simulate the actual bug: local host is "homeassistant-yellow" but restoring from "tim-server"
+        let config = Config {
+            restic_password: "test".to_string(),
+            restic_repo_base: "s3:https://abc123.r2.cloudflarestorage.com/restic".to_string(),
+            aws_access_key_id: "test".to_string(),
+            aws_secret_access_key: "test".to_string(),
+            aws_default_region: "auto".to_string(),
+            aws_s3_endpoint: "https://abc123.r2.cloudflarestorage.com".to_string(),
+            backup_paths: vec![],
+            hostname: "homeassistant-yellow".to_string(),
+        };
+
+        // The old buggy get_repo_url would use "homeassistant-yellow"
+        let buggy_url = config.get_repo_url("docker_volume/immich")?;
+        assert!(buggy_url.contains("homeassistant-yellow"));
+
+        // The fix: get_repo_url_for_host uses the selected host
+        let correct_url = config.get_repo_url_for_host("tim-server", "docker_volume/immich")?;
+        assert_eq!(
+            correct_url,
+            "s3:https://abc123.r2.cloudflarestorage.com/restic/tim-server/docker_volume/immich"
+        );
+        assert!(!correct_url.contains("homeassistant-yellow"));
+
         Ok(())
     }
 }

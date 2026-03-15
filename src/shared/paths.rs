@@ -65,7 +65,6 @@ impl PathUtilities {
 pub struct PathMapper;
 
 impl PathMapper {
-
     /// Convert native filesystem path to repository subpath
     pub fn path_to_repo_subpath(path: &Path) -> Result<String, BackupServiceError> {
         let path_str = path.to_string_lossy();
@@ -132,19 +131,28 @@ mod tests {
         Ok(())
     }
 
-
     // Additional core tests kept, but most bloat removed
     #[test]
     fn test_comprehensive_path_conversion() -> Result<(), BackupServiceError> {
         let test_cases = vec![
-            ("/mnt/docker-data/volumes/complex/nested/volume", "docker_volume/complex_nested_volume"),
+            (
+                "/mnt/docker-data/volumes/complex/nested/volume",
+                "docker_volume/complex_nested_volume",
+            ),
             ("/var/log/nginx/access", "system/var_log_nginx_access"),
-            ("/home/user/Projects/rust/my-project", "user_home/user/Projects_rust_my-project"),
+            (
+                "/home/user/Projects/rust/my-project",
+                "user_home/user/Projects_rust_my-project",
+            ),
         ];
 
         for (native_path, expected_repo_path) in test_cases {
             let result = PathMapper::path_to_repo_subpath(Path::new(native_path))?;
-            assert_eq!(result, expected_repo_path, "Failed for path: {}", native_path);
+            assert_eq!(
+                result, expected_repo_path,
+                "Failed for path: {}",
+                native_path
+            );
         }
         Ok(())
     }

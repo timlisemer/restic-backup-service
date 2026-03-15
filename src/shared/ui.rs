@@ -3,8 +3,6 @@ use crate::shared::constants::{CATEGORY_DOCKER_VOLUME, CATEGORY_SYSTEM, CATEGORY
 use crate::shared::operations::RepositorySelectionItem;
 use chrono::{DateTime, Duration, Utc};
 use dialoguer::{Confirm, MultiSelect, Select};
-use tracing::info;
-
 /// Handle category-based repository selection
 fn handle_category_selection(
     backup_data: &[RepositorySelectionItem],
@@ -558,7 +556,7 @@ mod tests {
     #[test]
     fn test_repository_category_filtering() -> Result<(), BackupServiceError> {
         // Test the category filtering logic used in select_repositories
-        let backup_data = vec![
+        let backup_data = [
             create_test_repository_item(
                 "/home/tim/docs",
                 "user_home/tim/docs",
